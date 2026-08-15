@@ -31,21 +31,29 @@ DATA_CACHE = {
 
 # --- 2. KÖMƏKÇİ FUNKSİYALAR ---
 def mehsul_sekli_tap(axtaris_metni):
-    """Məhsul adından birbaşa şəkil linkini tapan köməkçi funksiya"""
+    """Məhsul adından birbaşa dəqiq şəkil linkini tapan köməkçi funksiya"""
     if not axtaris_metni or axtaris_metni == "-":
         return None
     try:
-        url = f"https://www.bing.com/images/async?q={urllib.parse.quote(axtaris_metni)}"
+        # Mötərizə daxilindəki səs-küyü (məs: (top 20), (yeni)) təmizləyirik
+        temiz_metn = re.sub(r'\(.*?\)', '', axtaris_metni).strip()
+        temiz_metn = ' '.join(temiz_metn.split())
+
+        url = f"https://www.bing.com/images/async?q={urllib.parse.quote(temiz_metn)}"
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
         r = requests.get(url, headers=headers, timeout=2.5)
+        # Bing-in axtarılan məhsula aid təsdiqlənmiş OIP miniatür şəkli
+        thumbs = re.findall(r'https?://tse[0-9]\.mm\.bing\.net/th/id/OIP\.[^"\'\s\\?&]+', r.text)
+        if thumbs:
+            return thumbs[0]
+        thumbs2 = re.findall(r'https?://[a-z0-9]+\.bing\.net/th\?id=OIP\.[^"\'\s\\&]+', r.text)
+        if thumbs2:
+            return thumbs2[0]
         murls = re.findall(r'murl&quot;:&quot;(https?://[^&]+\.(?:jpg|jpeg|png|webp))', r.text, re.IGNORECASE)
         if murls:
             return murls[0]
-        thurls = re.findall(r'src="(https?://tse[0-9]\.mm\.bing\.net/th\?id=[^"]+)"', r.text)
-        if thurls:
-            return thurls[0]
     except Exception:
         pass
     return None
