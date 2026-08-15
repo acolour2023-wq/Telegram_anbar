@@ -157,24 +157,24 @@ def bazada_axtar(axtaris_cumlesi):
         ad_norm = az_normalize(db_ad)
         brend_norm = az_normalize(db_brend)
 
-        tam_setir = f"{kod_norm} {barkod_norm} {ad_norm} {brend_norm}"
-
-        if all(soz in tam_setir for soz in axtarilan_sozler):
+        if is_digits:
             score = 0
-            if is_digits:
-                if barkod_norm == query_norm or kod_norm == query_norm:
-                    score += 100
-                elif barkod_norm.endswith(query_norm):
-                    score += 80
-                elif query_norm in barkod_norm or query_norm in kod_norm:
-                    score += 50
+            if barkod_norm == query_norm or kod_norm == query_norm:
+                score = 100
+            elif barkod_norm.endswith(query_norm) or kod_norm.endswith(query_norm):
+                score = 80
             else:
+                continue
+            matches.append((score, row, db_kod, db_ad, db_barkod, db_brend, db_qalig))
+        else:
+            tam_setir = f"{kod_norm} {barkod_norm} {ad_norm} {brend_norm}"
+            if all(soz in tam_setir for soz in axtarilan_sozler):
+                score = 0
                 if query_norm in ad_norm:
                     score += 40
                 if query_norm in brend_norm:
                     score += 30
-
-            matches.append((score, row, db_kod, db_ad, db_barkod, db_brend, db_qalig))
+                matches.append((score, row, db_kod, db_ad, db_barkod, db_brend, db_qalig))
 
     if not matches:
         return [("❌ Uyğun məhsul tapılmadı.", None)]
