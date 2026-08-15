@@ -4,6 +4,8 @@ import sys
 import unicodedata
 import urllib.parse
 import time
+import re
+import requests
 import pandas as pd
 import telebot
 from telebot import types
@@ -28,6 +30,26 @@ DATA_CACHE = {
 }
 
 # --- 2. KÖMƏKÇİ FUNKSİYALAR ---
+def mehsul_sekli_tap(axtaris_metni):
+    """Məhsul adından birbaşa şəkil linkini tapan köməkçi funksiya"""
+    if not axtaris_metni or axtaris_metni == "-":
+        return None
+    try:
+        url = f"https://www.bing.com/images/async?q={urllib.parse.quote(axtaris_metni)}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        r = requests.get(url, headers=headers, timeout=2.5)
+        murls = re.findall(r'murl&quot;:&quot;(https?://[^&]+\.(?:jpg|jpeg|png|webp))', r.text, re.IGNORECASE)
+        if murls:
+            return murls[0]
+        thurls = re.findall(r'src="(https?://tse[0-9]\.mm\.bing\.net/th\?id=[^"]+)"', r.text)
+        if thurls:
+            return thurls[0]
+    except Exception:
+        pass
+    return None
+
 def az_normalize(text):
     """
     Azərbaycan hərflərini və Unicode simvollarını axtarış üçün təmizləyir.
@@ -118,14 +140,14 @@ def google_duymesi_duzelt(axtaris_metni):
 def bazada_axtar(axtaris_cumlesi):
     df, err = datani_yukle()
     if err:
-        return [(err, None)]
+        return [(err, None, None)]
 
     raw_query = str(axtaris_cumlesi).strip()
     query_norm = az_normalize(raw_query)
     axtarilan_sozler = query_norm.split()
 
     if not axtarilan_sozler:
-        return [("ℹ️ Xahiş olunur axtarış sözü daxil edin.", None)]
+        return [("ℹ️ Xahiş olunur axtarış sözü daxil edin.", None, None)]
 
     print(f"🔎 Axtarılır: '{raw_query}' (Norm: {axtarilan_sozler})")
 
@@ -139,7 +161,7 @@ def bazada_axtar(axtaris_cumlesi):
     qalig_col = next((orig for orig, clean in col_map.items() if 'qalig' in clean or 'qaliq' in clean or 'stok' in clean or 'say' in clean), None)
 
     if not kod_col and not ad_col: 
-        return [("❌ Excel faylında uyğun sütunlar ('KODU', 'ADI') tapılmadı.", None)]
+        return [("❌ Excel faylında uyğun sütunlar ('KODU', 'ADI') tapılmadı.", None, None)]
 
     matches = []
     records = df.to_dict('records')
@@ -177,7 +199,7 @@ def bazada_axtar(axtaris_cumlesi):
                 matches.append((score, row, db_kod, db_ad, db_barkod, db_brend, db_qalig))
 
     if not matches:
-        return [("❌ Uyğun məhsul tapılmadı.", None)]
+        return [("❌ Uyğun məhsul tapılmadı.", None, None)]
 
     matches.sort(key=lambda x: x[0], reverse=True)
 
@@ -210,10 +232,13 @@ def bazada_axtar(axtaris_cumlesi):
         google_query = db_barkod if db_barkod and db_barkod != "-" else db_ad
         google_markup = google_duymesi_duzelt(google_query)
 
-        neticeler.append((caption, google_markup))
+        # Şəkil axtarışı üçün söz
+        img_query = f"{db_ad} {goster_brend}".strip() if goster_brend != "-" else db_ad
+
+        neticeler.append((caption, google_markup, img_query))
 
     if toplam_say > 10:
-        neticeler.append((f"ℹ️ Cəmi {toplam_say} məhsul tapıldı. İlk 10-u göstərildi.\nDaha dəqiq axtarış üçün adı və ya barkodu tam daxil edin.", None))
+        neticeler.append((f"ℹ️ Cəmi {toplam_say} məhsul tapıldı. İlk 10-u göstərildi.\nDaha dəqiq axtarış üçün adı və ya barkodu tam daxil edin.", None, None))
 
     return neticeler
 
@@ -260,11 +285,26 @@ def handle_message(message):
         # Ümumi axtarış
         neticeler = bazada_axtar(txt)
 
-        for caption, inline_markup in neticeler:
-            if inline_markup:
-                tg_bot.send_message(message.chat.id, caption, reply_markup=inline_markup)
-            else:
-                tg_bot.send_message(message.chat.id, caption)
+        for item in neticeler:
+            caption = item[0]
+            inline_markup = item[1]
+            img_query = item[2] if len(item) > 2 else None
+
+            photo_url = mehsul_sekli_tap(img_query) if img_query else None
+
+            sent = False
+            if photo_url:
+                try:
+                    tg_bot.send_photo(message.chat.id, photo_url, caption=caption, reply_markup=inline_markup)
+                    sent = True
+                except Exception as pe:
+                    print(f"⚠️ Şəkil göndərmə xətası: {pe}")
+
+            if not sent:
+                if inline_markup:
+                    tg_bot.send_message(message.chat.id, caption, reply_markup=inline_markup)
+                else:
+                    tg_bot.send_message(message.chat.id, caption)
 
     except Exception as e:
         print(f"❌ Göndərmə xətası: {e}")
