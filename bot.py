@@ -253,12 +253,63 @@ def send_welcome(message):
     metn = (
         "👋 Salam! Məhsul axtarış botuna xoş gəldiniz.\n\n"
         "🔍 Axtarmaq istədiyiniz məhsulun kodunu, adını, brendini və ya barkodunu (son 4 rəqəmini) yazın.\n"
+        "📁 Yeni Excel faylını bota göndərərək anbarı anında yeniləyə bilərsiniz.\n\n"
         "Aşağıdakı menyu düymələrindən istifadə edə bilərsiniz:"
     )
     try:
         tg_bot.reply_to(message, metn, reply_markup=ana_menyu())
     except Exception as e:
         print(f"❌ Welcome mesajı göndərmə xətası: {e}")
+
+@tg_bot.message_handler(content_types=['document'])
+def handle_document(message):
+    try:
+        user_name = message.from_user.first_name or "İstifadəçi"
+        doc = message.document
+        file_name = doc.file_name or ""
+        
+        if not (file_name.lower().endswith('.xlsx') or file_name.lower().endswith('.xls')):
+            tg_bot.reply_to(message, "⚠️ Xahiş olunur yalnız Excel (.xlsx / .xls) faylı göndərin.")
+            return
+
+        status_msg = tg_bot.reply_to(message, "🔄 Yeni Excel faylı yüklənir və anbar yenilənir, xahiş olunur gözləyin...")
+
+        # Faylı yükləyirik
+        file_info = tg_bot.get_file(doc.file_id)
+        downloaded_file = tg_bot.download_file(file_info.file_path)
+
+        # Mövcud fayl yolunu tapırıq və ya yeni fayl adı təyin edirik
+        target_path = fayli_tap()
+        if not target_path:
+            current_folder = os.path.dirname(os.path.abspath(__file__))
+            target_path = os.path.join(current_folder, "Son_anbar_qaliqi.xlsx")
+
+        # Faylı diskə yazırıq
+        with open(target_path, 'wb') as f:
+            f.write(downloaded_file)
+
+        # Keşi sıfırlayırıq və yeni faylı RAM-a yükləyirik
+        DATA_CACHE["df"] = None
+        DATA_CACHE["mtime"] = 0
+        DATA_CACHE["filepath"] = None
+
+        df, err = datani_yukle()
+
+        if err:
+            tg_bot.edit_message_text(f"❌ Fayl oxunarkən xəta baş verdi:\n{err}", message.chat.id, status_msg.message_id)
+        else:
+            cavab = (
+                f"✅ YENİ EXCEL FAYLI QƏBUL OLUNDU! 🎉\n\n"
+                f"📄 Fayl adı: {file_name}\n"
+                f"📊 Ümumi sətir sayısı: {len(df)} məhsul\n"
+                f"⚡ Anbar 1 saniyəyə yeniləndi və dərhal istifadəyə hazırdır!"
+            )
+            tg_bot.edit_message_text(cavab, message.chat.id, status_msg.message_id)
+            print(f"📥 Yeni Excel yükləndi ({user_name}): {file_name} ({len(df)} sətir)")
+
+    except Exception as e:
+        print(f"❌ Excel yükləmə xətası: {e}")
+        tg_bot.reply_to(message, f"❌ Fayl yüklənərkən xəta baş verdi: {e}")
 
 @tg_bot.message_handler(func=lambda message: True)
 def handle_message(message):
