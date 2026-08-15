@@ -161,7 +161,7 @@ def bazada_axtar(axtaris_cumlesi):
             score = 0
             if barkod_norm == query_norm or kod_norm == query_norm:
                 score = 100
-            elif barkod_norm.endswith(query_norm) or kod_norm.endswith(query_norm):
+            elif barkod_norm.endswith(query_norm):
                 score = 80
             else:
                 continue
