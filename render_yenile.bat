@@ -1,15 +1,18 @@
 @echo off
 chcp 65001 > nul
-title Render Və GitHub Avtomatik Yeniləmə
+title Render Ve GitHub Avtomatik Yenileme
 echo ===================================================
-echo   GitHub / Render (7/24 Server) Avtomatik Yenilənir...
+echo   GitHub Ve Render Server Avtomatik Yenilenir...
 echo ===================================================
 cd /d "%~dp0"
-echo Dəyişikliklər yoxlanılır və GitHub-a göndərilir...
+echo.
+echo Deyisiklikler yoxlanilir ve GitHub-a gonderilir...
 git add .
-git commit -m "Excel ve Bot yenilendi - %date% %time%"
+git commit -m "Excel ve Bot yenilendi"
 git push origin main
 echo.
-echo ✅ Bütün dəyişikliklər GitHub-a yükləndi!
-echo 🚀 Render 1-2 dəqiqə ərzində avtomatik olaraq yeni kodu və Excel faylını işə salacaq.
+echo ===================================================
+echo   Butun deyisiklikler GitHub-a yuklendi!
+echo   Render 1-2 deqiqe erzinde botu yenileyecek.
+echo ===================================================
 pause
