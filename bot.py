@@ -28,10 +28,26 @@ DATA_CACHE = {
 }
 
 # --- 2. KÖMƏKÇİ FUNKSİYALAR ---
+def az_normalize(text):
+    """
+    Azərbaycan hərflərini və Unicode simvollarını axtarış üçün təmizləyir.
+    Məsələn: 'NUR GİDA' -> 'nur gida', 'MƏHSUL' -> 'mehsul'
+    """
+    if not text:
+        return ""
+    tr_map = str.maketrans({
+        'İ': 'i', 'I': 'ı', 'Ə': 'ə', 'Ş': 'ş', 'Ç': 'ç', 'Ğ': 'ğ', 'Ö': 'ö', 'Ü': 'ü'
+    })
+    s = str(text).translate(tr_map).lower()
+    s = ''.join(ch for ch in unicodedata.normalize('NFKD', s) if unicodedata.category(ch) != 'Mn')
+    ascii_map = str.maketrans({
+        'ı': 'i', 'ə': 'e', 'ş': 's', 'ç': 'c', 'ğ': 'g', 'ö': 'o', 'ü': 'u'
+    })
+    return s.translate(ascii_map).strip()
+
 def sutun_temizle(c):
-    """Sütun adlarını kiçik hərflərə çevirir və Unicode bələdçi simvollarını (\u0307 kimi) təmizləyir."""
-    s = str(c).lower().strip()
-    return ''.join(ch for ch in unicodedata.normalize('NFKD', s) if unicodedata.category(ch) != 'Mn')
+    """Sütun adlarını kiçik hərflərə çevirir və Unicode bələdçi simvollarını təmizləyir."""
+    return az_normalize(c)
 
 def fayli_tap():
     """Skriptin yerləşdiyi qovluqda müvafiq .xlsx faylını tapır."""
@@ -74,7 +90,7 @@ def temizle(deyer):
     if pd.isna(deyer):
         return ""
     s = str(deyer).strip()
-    if s.lower() in ["nan", "none"]:
+    if s.lower() in ["nan", "none", "null"]:
         return ""
     if s.endswith(',00') or s.endswith('.00'):
         s = s[:-3]
@@ -94,7 +110,6 @@ def google_duymesi_duzelt(axtaris_metni):
     """Google Images (Şəkillər) axtarış linki olan Inline Düymə hazırlayır"""
     markup = types.InlineKeyboardMarkup()
     encoded_text = urllib.parse.quote(axtaris_metni)
-    # &tbm=isch parametrini əlavə edirik ki, birbaşa Google "Şəkillər" (Images/Картинки) tabı açılsın
     url = f"https://www.google.com/search?q={encoded_text}&tbm=isch"
     btn = types.InlineKeyboardButton("🖼️ Şəklə Bax (Google)", url=url)
     markup.add(btn)
@@ -105,11 +120,14 @@ def bazada_axtar(axtaris_cumlesi):
     if err:
         return [(err, None)]
 
-    axtarilan_sozler = str(axtaris_cumlesi).lower().split()
+    raw_query = str(axtaris_cumlesi).strip()
+    query_norm = az_normalize(raw_query)
+    axtarilan_sozler = query_norm.split()
+
     if not axtarilan_sozler:
         return [("ℹ️ Xahiş olunur axtarış sözü daxil edin.", None)]
 
-    print(f"🔎 Axtarılır: {axtarilan_sozler}")
+    print(f"🔎 Axtarılır: '{raw_query}' (Norm: {axtarilan_sozler})")
 
     col_map = {c: sutun_temizle(c) for c in df.columns}
 
@@ -123,8 +141,9 @@ def bazada_axtar(axtaris_cumlesi):
     if not kod_col and not ad_col: 
         return [("❌ Excel faylında uyğun sütunlar ('KODU', 'ADI') tapılmadı.", None)]
 
-    neticeler = []
+    matches = []
     records = df.to_dict('records')
+    is_digits = query_norm.isdigit()
 
     for row in records:
         db_kod = temizle(row.get(kod_col, "")) if kod_col else ""
@@ -133,41 +152,68 @@ def bazada_axtar(axtaris_cumlesi):
         db_brend = str(row.get(brend_col, "")).strip() if brend_col else ""
         db_qalig = temizle(row.get(qalig_col, "")) if qalig_col else ""
 
-        tam_setir = f"{db_kod} {db_barkod} {db_ad} {db_brend}".lower()
+        kod_norm = az_normalize(db_kod)
+        barkod_norm = az_normalize(db_barkod)
+        ad_norm = az_normalize(db_ad)
+        brend_norm = az_normalize(db_brend)
+
+        tam_setir = f"{kod_norm} {barkod_norm} {ad_norm} {brend_norm}"
 
         if all(soz in tam_setir for soz in axtarilan_sozler):
-            qiymet_raw = str(row.get(qiymet_col, "0")).replace(',', '.') if qiymet_col else "0"
-            try:
-                qiymet_val = float(qiymet_raw)
-                qiymet = f"{qiymet_val:.2f}".rstrip('0').rstrip('.')
-            except Exception:
-                qiymet = qiymet_raw
+            score = 0
+            if is_digits:
+                if barkod_norm == query_norm or kod_norm == query_norm:
+                    score += 100
+                elif barkod_norm.endswith(query_norm):
+                    score += 80
+                elif query_norm in barkod_norm or query_norm in kod_norm:
+                    score += 50
+            else:
+                if query_norm in ad_norm:
+                    score += 40
+                if query_norm in brend_norm:
+                    score += 30
 
-            goster_brend = db_brend if db_brend and db_brend.lower() != "nan" else "-"
-            goster_barkod = db_barkod if db_barkod and db_barkod.lower() != "nan" else "-"
-            goster_qalig = db_qalig if db_qalig and db_qalig.lower() != "nan" else "-"
+            matches.append((score, row, db_kod, db_ad, db_barkod, db_brend, db_qalig))
 
-            caption = (
-                f"🆔 Kod: {db_kod}\n"
-                f"🏷 Məhsul: {db_ad}\n"
-                f"🏢 Brend: {goster_brend}\n"
-                f"💰 Qiymət: {qiymet} AZN\n"
-                f"🔢 Barkod: {goster_barkod}"
-            )
-            if qalig_col and goster_qalig != "-":
-                caption += f"\n📈 Qalıq: {goster_qalig}"
-
-            # Google Şəkillər axtarışı üçün düymə
-            google_query = db_barkod if db_barkod and db_barkod != "-" else db_ad
-            google_markup = google_duymesi_duzelt(google_query)
-
-            neticeler.append((caption, google_markup))
-
-            if len(neticeler) >= 10:
-                break
-
-    if not neticeler:
+    if not matches:
         return [("❌ Uyğun məhsul tapılmadı.", None)]
+
+    matches.sort(key=lambda x: x[0], reverse=True)
+
+    neticeler = []
+    toplam_say = len(matches)
+
+    for score, row, db_kod, db_ad, db_barkod, db_brend, db_qalig in matches[:10]:
+        qiymet_raw = str(row.get(qiymet_col, "0")).replace(',', '.') if qiymet_col else "0"
+        try:
+            qiymet_val = float(qiymet_raw)
+            qiymet = f"{qiymet_val:.2f}".rstrip('0').rstrip('.')
+        except Exception:
+            qiymet = qiymet_raw
+
+        goster_brend = db_brend if db_brend and db_brend.lower() != "nan" else "-"
+        goster_barkod = db_barkod if db_barkod and db_barkod.lower() != "nan" else "-"
+        goster_qalig = db_qalig if db_qalig and db_qalig.lower() != "nan" else "-"
+
+        caption = (
+            f"🆔 Kod: {db_kod}\n"
+            f"📦 Məhsul: {db_ad}\n"
+            f"🏷️ Brend: {goster_brend}\n"
+            f"🏷️ Qiymət: {qiymet} AZN\n"
+            f"📊 Barkod: {goster_barkod}"
+        )
+        if qalig_col and goster_qalig != "-":
+            caption += f"\n📊 Qalıq: {goster_qalig}"
+
+        # Google Şəkillər axtarışı üçün düymə
+        google_query = db_barkod if db_barkod and db_barkod != "-" else db_ad
+        google_markup = google_duymesi_duzelt(google_query)
+
+        neticeler.append((caption, google_markup))
+
+    if toplam_say > 10:
+        neticeler.append((f"ℹ️ Cəmi {toplam_say} məhsul tapıldı. İlk 10-u göstərildi.\nDaha dəqiq axtarış üçün adı və ya barkodu tam daxil edin.", None))
 
     return neticeler
 
@@ -176,7 +222,7 @@ def bazada_axtar(axtaris_cumlesi):
 def send_welcome(message):
     metn = (
         "👋 Salam! Məhsul axtarış botuna xoş gəldiniz.\n\n"
-        "🔍 Axtarmaq istədiyiniz məhsulun kodunu, adını, brendini və ya barkodunu yazın.\n"
+        "🔍 Axtarmaq istədiyiniz məhsulun kodunu, adını, brendini və ya barkodunu (son 4 rəqəmini) yazın.\n"
         "Aşağıdakı menyu düymələrindən istifadə edə bilərsiniz:"
     )
     try:
@@ -188,7 +234,10 @@ def send_welcome(message):
 def handle_message(message):
     try:
         user_name = message.from_user.first_name or "İstifadəçi"
-        txt = message.text.strip()
+        txt = message.text.strip() if message.text else ""
+        if not txt:
+            return
+
         print(f"📩 Mesaj ({user_name}): {txt}")
 
         # Menyu düymələri
@@ -235,3 +284,4 @@ def start_bot():
 
 if __name__ == "__main__":
     start_bot()
+
