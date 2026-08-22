@@ -6,8 +6,14 @@ echo   Telegram Excel Bot Başladılır (@Anbarbotu_bot)
 echo ==============================================
 cd /d "%~dp0"
 echo Lazımi kitabxanalar yoxlanılır...
-py -m pip install -r requirements.txt
+py -m pip install -r requirements.txt --quiet
 echo.
-echo Bot işə salınır. Dayandırmaq üçün Ctrl+C sıxın.
+
+:loop
+echo [%date% %time%] Bot işə salınır...
 py bot.py
-pause
+echo.
+echo ⚠️ Bot dayandı və ya şəbəkə qırıldı. 5 saniyə sonra avtomatik yenidən başladılır...
+timeout /t 5 > nul
+goto loop
+

@@ -41,6 +41,37 @@ DATA_CACHE = {
 }
 
 # --- 2. KÖMƏKÇİ FUNKSİYALAR ---
+def safe_send_message(chat_id, text, reply_markup=None, thread_id=None, reply_to_message_id=None):
+    """
+    Təhlükəsiz mesaj göndərmə funksiyası.
+    İstənilən Telegram API, şəbəkə və ya mövzu (topic) xətasında dərhal fallback tətbiq edərək 
+    istifadəçinin cavabsız qalmasının qarşısını alır.
+    """
+    if not text:
+        return None
+    
+    # 1-ci cəhd: Mövzu (thread_id) və Inline Markup düymələri ilə
+    try:
+        if reply_to_message_id:
+            return tg_bot.send_message(chat_id, text, reply_markup=reply_markup, message_thread_id=thread_id, reply_to_message_id=reply_to_message_id)
+        else:
+            return tg_bot.send_message(chat_id, text, reply_markup=reply_markup, message_thread_id=thread_id)
+    except Exception as e1:
+        safe_print(f"⚠️ İlk mesaj göndərmə cəhdi uğursuz oldu: {e1}")
+
+    # 2-ci cəhd: Düyməsiz (plain text) olaraq mövzuya göndərmə
+    try:
+        return tg_bot.send_message(chat_id, text, message_thread_id=thread_id)
+    except Exception as e2:
+        safe_print(f"⚠️ Düyməsiz göndərmə cəhdi uğursuz oldu: {e2}")
+
+    # 3-cü cəhd: Birbaşa əsas çata düyməsiz və mövzusuz göndərmə (son çətir)
+    try:
+        return tg_bot.send_message(chat_id, text)
+    except Exception as e3:
+        safe_print(f"❌ Mesaj heç bir yolla göndərilə bilmədi: {e3}")
+        return None
+
 def mehsul_sekli_tap(axtaris_metni):
     """Məhsul adından birbaşa dəqiq şəkil linkini tapan köməkçi funksiya"""
     if not axtaris_metni or axtaris_metni == "-":
@@ -109,12 +140,12 @@ def datani_yukle():
     if not fayl:
         return None, "❌ Excel faylı tapılmadı! Xahiş olunur qovluğa .xlsx faylı əlavə edin."
 
-    mtime = os.path.getmtime(fayl)
-    
-    if DATA_CACHE["df"] is not None and DATA_CACHE["mtime"] == mtime and DATA_CACHE["filepath"] == fayl:
-        return DATA_CACHE["df"], None
-
     try:
+        mtime = os.path.getmtime(fayl)
+        
+        if DATA_CACHE["df"] is not None and DATA_CACHE["mtime"] == mtime and DATA_CACHE["filepath"] == fayl:
+            return DATA_CACHE["df"], None
+
         df = pd.read_excel(fayl, dtype=str).fillna("")
         DATA_CACHE["df"] = df
         DATA_CACHE["mtime"] = mtime
@@ -122,6 +153,7 @@ def datani_yukle():
         safe_print(f"🔄 Excel yaddaşa yükləndi: {os.path.basename(fayl)} ({len(df)} sətir)")
         return df, None
     except Exception as e:
+        safe_print(f"❌ Excel oxunma xətası: {e}")
         return None, f"❌ Fayl oxunarkən xəta baş verdi: {e}"
 
 def temizle(deyer):
@@ -155,107 +187,112 @@ def google_duymesi_duzelt(axtaris_metni):
     return markup
 
 def bazada_axtar(axtaris_cumlesi):
-    df, err = datani_yukle()
-    if err:
-        return [(err, None)]
+    """Bazada tam təhlükəsiz axtarış funksiyası. Həmişə (metn, markup) 2-tuple qaytarır."""
+    try:
+        df, err = datani_yukle()
+        if err:
+            return [(err, None)]
 
-    raw_query = str(axtaris_cumlesi).strip()
-    query_norm = az_normalize(raw_query)
-    axtarilan_sozler = query_norm.split()
+        raw_query = str(axtaris_cumlesi).strip()
+        query_norm = az_normalize(raw_query)
+        axtarilan_sozler = query_norm.split()
 
-    if not axtarilan_sozler:
-        return [("ℹ️ Xahiş olunur axtarış sözü daxil edin.", None)]
+        if not axtarilan_sozler:
+            return [("ℹ️ Xahiş olunur axtarış sözü daxil edin.", None)]
 
-    safe_print(f"🔎 Axtarılır: '{raw_query}' (Norm: {axtarilan_sozler})")
+        safe_print(f"🔎 Axtarılır: '{raw_query}' (Norm: {axtarilan_sozler})")
 
-    col_map = {c: sutun_temizle(c) for c in df.columns}
+        col_map = {c: sutun_temizle(c) for c in df.columns}
 
-    kod_col = next((orig for orig, clean in col_map.items() if 'kod' in clean or 'code' in clean), None)
-    ad_col = next((orig for orig, clean in col_map.items() if 'ad' in clean or 'name' in clean), None)
-    qiymet_col = next((orig for orig, clean in col_map.items() if 'qiym' in clean or 'qym' in clean or 'price' in clean), None)
-    barkod_col = next((orig for orig, clean in col_map.items() if 'barkod' in clean or 'barcode' in clean), None)
-    brend_col = next((orig for orig, clean in col_map.items() if 'brend' in clean or 'brand' in clean), None)
-    qalig_col = next((orig for orig, clean in col_map.items() if 'qalig' in clean or 'qaliq' in clean or 'stok' in clean or 'say' in clean), None)
+        kod_col = next((orig for orig, clean in col_map.items() if any(k in clean for k in ['kod', 'code', 'id', 'nomer'])), None)
+        ad_col = next((orig for orig, clean in col_map.items() if any(k in clean for k in ['ad', 'name', 'mehsul', 'naim', 'tovar'])), None)
+        qiymet_col = next((orig for orig, clean in col_map.items() if any(k in clean for k in ['qiym', 'qym', 'price', 'cena', 'som'])), None)
+        barkod_col = next((orig for orig, clean in col_map.items() if any(k in clean for k in ['barkod', 'barcode', 'shtrih'])), None)
+        brend_col = next((orig for orig, clean in col_map.items() if any(k in clean for k in ['brend', 'brand', 'firma', 'marka'])), None)
+        qalig_col = next((orig for orig, clean in col_map.items() if any(k in clean for k in ['qalig', 'qaliq', 'stok', 'say', 'miqdar', 'ostatok', 'count', 'qty'])), None)
 
-    if not kod_col and not ad_col: 
-        return [("❌ Excel faylında uyğun sütunlar ('KODU', 'ADI') tapılmadı.", None)]
+        if not kod_col and not ad_col: 
+            return [("❌ Excel faylında uyğun sütunlar ('KODU', 'ADI') tapılmadı.", None)]
 
-    matches = []
-    records = df.to_dict('records')
-    is_digits = query_norm.isdigit()
+        matches = []
+        records = df.to_dict('records')
+        is_digits = query_norm.isdigit()
 
-    for row in records:
-        db_kod = temizle(row.get(kod_col, "")) if kod_col else ""
-        db_ad = str(row.get(ad_col, "")).strip() if ad_col else ""
-        db_barkod = temizle(row.get(barkod_col, "")) if barkod_col else ""
-        db_brend = str(row.get(brend_col, "")).strip() if brend_col else ""
-        db_qalig = temizle(row.get(qalig_col, "")) if qalig_col else ""
+        for row in records:
+            db_kod = temizle(row.get(kod_col, "")) if kod_col else ""
+            db_ad = str(row.get(ad_col, "")).strip() if ad_col else ""
+            db_barkod = temizle(row.get(barkod_col, "")) if barkod_col else ""
+            db_brend = str(row.get(brend_col, "")).strip() if brend_col else ""
+            db_qalig = temizle(row.get(qalig_col, "")) if qalig_col else ""
 
-        kod_norm = az_normalize(db_kod)
-        barkod_norm = az_normalize(db_barkod)
-        ad_norm = az_normalize(db_ad)
-        brend_norm = az_normalize(db_brend)
+            kod_norm = az_normalize(db_kod)
+            barkod_norm = az_normalize(db_barkod)
+            ad_norm = az_normalize(db_ad)
+            brend_norm = az_normalize(db_brend)
 
-        if is_digits:
-            score = 0
-            if barkod_norm == query_norm or kod_norm == query_norm:
-                score = 100
-            elif barkod_norm.endswith(query_norm) or kod_norm.endswith(query_norm):
-                score = 80
-            elif query_norm in barkod_norm or query_norm in kod_norm:
-                score = 60
-            else:
-                continue
-            matches.append((score, row, db_kod, db_ad, db_barkod, db_brend, db_qalig))
-        else:
-            tam_setir = f"{kod_norm} {barkod_norm} {ad_norm} {brend_norm}"
-            if all(soz in tam_setir for soz in axtarilan_sozler):
+            if is_digits:
                 score = 0
-                if query_norm in ad_norm:
-                    score += 40
-                if query_norm in brend_norm:
-                    score += 30
+                if barkod_norm == query_norm or kod_norm == query_norm:
+                    score = 100
+                elif barkod_norm.endswith(query_norm) or kod_norm.endswith(query_norm):
+                    score = 80
+                elif query_norm in barkod_norm or query_norm in kod_norm:
+                    score = 60
+                else:
+                    continue
                 matches.append((score, row, db_kod, db_ad, db_barkod, db_brend, db_qalig))
+            else:
+                tam_setir = f"{kod_norm} {barkod_norm} {ad_norm} {brend_norm}"
+                if all(soz in tam_setir for soz in axtarilan_sozler):
+                    score = 0
+                    if query_norm in ad_norm:
+                        score += 40
+                    if query_norm in brend_norm:
+                        score += 30
+                    matches.append((score, row, db_kod, db_ad, db_barkod, db_brend, db_qalig))
 
-    if not matches:
-        return [("❌ Uyğun məhsul tapılmadı.", None)]
+        if not matches:
+            return [("❌ Uyğun məhsul tapılmadı.", None)]
 
-    matches.sort(key=lambda x: x[0], reverse=True)
+        matches.sort(key=lambda x: x[0], reverse=True)
 
-    neticeler = []
-    toplam_say = len(matches)
+        neticeler = []
+        toplam_say = len(matches)
 
-    for score, row, db_kod, db_ad, db_barkod, db_brend, db_qalig in matches[:10]:
-        qiymet_raw = str(row.get(qiymet_col, "0")).replace(',', '.') if qiymet_col else "0"
-        try:
-            qiymet_val = float(qiymet_raw)
-            qiymet = f"{qiymet_val:.2f}".rstrip('0').rstrip('.')
-        except Exception:
-            qiymet = qiymet_raw
+        for score, row, db_kod, db_ad, db_barkod, db_brend, db_qalig in matches[:10]:
+            qiymet_raw = str(row.get(qiymet_col, "0")).replace(',', '.') if qiymet_col else "0"
+            try:
+                qiymet_val = float(qiymet_raw)
+                qiymet = f"{qiymet_val:.2f}".rstrip('0').rstrip('.')
+            except Exception:
+                qiymet = qiymet_raw
 
-        goster_brend = db_brend if db_brend and db_brend.lower() != "nan" else "-"
-        goster_barkod = db_barkod if db_barkod and db_barkod.lower() != "nan" else "-"
-        goster_qalig = db_qalig if db_qalig and db_qalig.lower() != "nan" else "-"
+            goster_brend = db_brend if db_brend and db_brend.lower() != "nan" else "-"
+            goster_barkod = db_barkod if db_barkod and db_barkod.lower() != "nan" else "-"
+            goster_qalig = db_qalig if db_qalig and db_qalig.lower() != "nan" else "-"
 
-        caption = (
-            f"🆔 Kod: {db_kod}\n"
-            f"📦 Məhsul: {db_ad}\n"
-            f"🏷️ Brend: {goster_brend}\n"
-            f"🏷️ Qiymət: {qiymet} AZN\n"
-            f"📊 Barkod: {goster_barkod}"
-        )
-        if qalig_col and goster_qalig != "-":
-            caption += f"\n📊 Qalıq: {goster_qalig}"
+            caption = (
+                f"🆔 Kod: {db_kod}\n"
+                f"📦 Məhsul: {db_ad}\n"
+                f"🏷️ Brend: {goster_brend}\n"
+                f"🏷️ Qiymət: {qiymet} AZN\n"
+                f"📊 Barkod: {goster_barkod}"
+            )
+            if qalig_col and goster_qalig != "-":
+                caption += f"\n📊 Qalıq: {goster_qalig}"
 
-        google_query = db_barkod if db_barkod and db_barkod != "-" else db_ad
-        google_markup = google_duymesi_duzelt(google_query)
+            google_query = db_barkod if db_barkod and db_barkod != "-" else db_ad
+            google_markup = google_duymesi_duzelt(google_query)
 
-        neticeler.append((caption, google_markup))
+            neticeler.append((caption, google_markup))
 
-    if toplam_say > 10:
-        neticeler.append((f"ℹ️ Cəmi {toplam_say} məhsul tapıldı. İlk 10-u göstərildi.\nDaha dəqiq axtarış üçün adı və ya barkodu tam daxil edin.", None))
+        if toplam_say > 10:
+            neticeler.append((f"ℹ️ Cəmi {toplam_say} məhsul tapıldı. İlk 10-u göstərildi.\nDaha dəqiq axtarış üçün adı və ya barkodu tam daxil edin.", None))
 
-    return neticeler
+        return neticeler
+    except Exception as general_err:
+        safe_print(f"❌ Axtarışda gözlənilməz xəta: {general_err}")
+        return [("❌ Axtarış icra edilərkən xəta baş verdi. Xahiş olunur axtarışı yenidən cəhd edin.", None)]
 
 # --- 3. BOT COMMAND HANDLERS ---
 @tg_bot.message_handler(commands=['start', 'help'])
@@ -267,7 +304,8 @@ def send_welcome(message):
         "Aşağıdakı menyu düymələrindən istifadə edə bilərsiniz:"
     )
     try:
-        tg_bot.reply_to(message, metn, reply_markup=ana_menyu())
+        thread_id = getattr(message, 'message_thread_id', None)
+        safe_send_message(message.chat.id, metn, reply_markup=ana_menyu(), thread_id=thread_id, reply_to_message_id=message.message_id)
     except Exception as e:
         safe_print(f"❌ Welcome mesajı göndərmə xətası: {e}")
 
@@ -277,12 +315,13 @@ def handle_document(message):
         user_name = message.from_user.first_name or "İstifadəçi"
         doc = message.document
         file_name = doc.file_name or ""
+        thread_id = getattr(message, 'message_thread_id', None)
         
         if not (file_name.lower().endswith('.xlsx') or file_name.lower().endswith('.xls')):
-            tg_bot.reply_to(message, "⚠️ Xahiş olunur yalnız Excel (.xlsx / .xls) faylı göndərin.")
+            safe_send_message(message.chat.id, "⚠️ Xahiş olunur yalnız Excel (.xlsx / .xls) faylı göndərin.", thread_id=thread_id, reply_to_message_id=message.message_id)
             return
 
-        status_msg = tg_bot.reply_to(message, "🔄 Yeni Excel faylı yüklənir və anbar yenilənir, xahiş olunur gözləyin...")
+        status_msg = safe_send_message(message.chat.id, "🔄 Yeni Excel faylı yüklənir və anbar yenilənir, xahiş olunur gözləyin...", thread_id=thread_id, reply_to_message_id=message.message_id)
 
         file_info = tg_bot.get_file(doc.file_id)
         downloaded_file = tg_bot.download_file(file_info.file_path)
@@ -302,7 +341,13 @@ def handle_document(message):
         df, err = datani_yukle()
 
         if err:
-            tg_bot.edit_message_text(f"❌ Fayl oxunarkən xəta baş verdi:\n{err}", message.chat.id, status_msg.message_id)
+            if status_msg and hasattr(status_msg, 'message_id'):
+                try:
+                    tg_bot.edit_message_text(f"❌ Fayl oxunarkən xəta baş verdi:\n{err}", message.chat.id, status_msg.message_id)
+                except Exception:
+                    safe_send_message(message.chat.id, f"❌ Fayl oxunarkən xəta baş verdi:\n{err}", thread_id=thread_id)
+            else:
+                safe_send_message(message.chat.id, f"❌ Fayl oxunarkən xəta baş verdi:\n{err}", thread_id=thread_id)
         else:
             cavab = (
                 f"✅ YENİ EXCEL FAYLI QƏBUL OLUNDU! 🎉\n\n"
@@ -310,12 +355,18 @@ def handle_document(message):
                 f"📊 Ümumi sətir sayısı: {len(df)} məhsul\n"
                 f"⚡ Anbar 1 saniyəyə yeniləndi və dərhal istifadəyə hazırdır!"
             )
-            tg_bot.edit_message_text(cavab, message.chat.id, status_msg.message_id)
+            if status_msg and hasattr(status_msg, 'message_id'):
+                try:
+                    tg_bot.edit_message_text(cavab, message.chat.id, status_msg.message_id)
+                except Exception:
+                    safe_send_message(message.chat.id, cavab, thread_id=thread_id)
+            else:
+                safe_send_message(message.chat.id, cavab, thread_id=thread_id)
             safe_print(f"📥 Yeni Excel yükləndi ({user_name}): {file_name} ({len(df)} sətir)")
 
     except Exception as e:
         safe_print(f"❌ Excel yükləmə xətası: {e}")
-        tg_bot.reply_to(message, f"❌ Fayl yüklənərkən xəta baş verdi: {e}")
+        safe_send_message(message.chat.id, f"❌ Fayl yüklənərkən xəta baş verdi: {e}", thread_id=thread_id)
 
 @tg_bot.message_handler(func=lambda message: True)
 def handle_message(message):
@@ -330,7 +381,7 @@ def handle_message(message):
 
         if txt == "📦 Anbar & Qiymət":
             cavab = "🔍 Axtarmaq istədiyiniz məhsulun kodunu, adını, brendini və ya barkodunu daxil edin:"
-            tg_bot.reply_to(message, cavab, reply_markup=ana_menyu())
+            safe_send_message(message.chat.id, cavab, reply_markup=ana_menyu(), thread_id=thread_id, reply_to_message_id=message.message_id)
             return
 
         if txt == "🗑 Yaddaşı Təmizlə":
@@ -339,25 +390,22 @@ def handle_message(message):
             DATA_CACHE["filepath"] = None
             df, err = datani_yukle()
             if err:
-                tg_bot.reply_to(message, err, reply_markup=ana_menyu())
+                safe_send_message(message.chat.id, err, reply_markup=ana_menyu(), thread_id=thread_id)
             else:
-                tg_bot.reply_to(message, f"🗑 Yaddaş (Keş) təmizləndi!\n🔄 Excel faylı təkrar oxundu: {len(df)} sətir yükləndi.", reply_markup=ana_menyu())
+                safe_send_message(message.chat.id, f"🗑 Yaddaş (Keş) təmizləndi!\n🔄 Excel faylı təkrar oxundu: {len(df)} sətir yükləndi.", reply_markup=ana_menyu(), thread_id=thread_id)
             return
 
         neticeler = bazada_axtar(txt)
 
         for res in neticeler:
             if isinstance(res, (tuple, list)):
-                caption = res[0]
-                inline_markup = res[1] if len(res) > 1 else None
+                caption = str(res[0]) if len(res) > 0 else "ℹ️ Məlumat mövcuddur."
+                inline_markup = res[1] if len(res) > 1 and isinstance(res[1], types.InlineKeyboardMarkup) else None
             else:
                 caption = str(res)
                 inline_markup = None
 
-            if inline_markup:
-                tg_bot.send_message(message.chat.id, caption, reply_markup=inline_markup, message_thread_id=thread_id)
-            else:
-                tg_bot.send_message(message.chat.id, caption, message_thread_id=thread_id)
+            safe_send_message(message.chat.id, caption, reply_markup=inline_markup, thread_id=thread_id)
 
     except Exception as e:
         safe_print(f"❌ Göndərmə xətası: {e}")
@@ -378,5 +426,6 @@ def start_bot():
 
 if __name__ == "__main__":
     start_bot()
+
 
 
