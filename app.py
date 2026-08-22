@@ -1,12 +1,27 @@
 import os
 import threading
 import time
+import socket
 from flask import Flask, render_template_string, jsonify
 import bot
 
-# Telegram botunu arxa fonda 7/24 başladırıq
-bot_thread = threading.Thread(target=bot.start_bot, daemon=True)
-bot_thread.start()
+def acquire_bot_lock():
+    """Çoxlu Gunicorn worker-ləri olduqda eyni botun bir neçə dəfə işə düşməsinin (409 Conflict) qarşısını alır"""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(('127.0.0.1', 47200))
+        return s
+    except Exception:
+        return None
+
+lock_socket = acquire_bot_lock()
+if lock_socket is not None:
+    bot.safe_print("🔒 Bot kilidi alındı. Telegram bot thread-i başladılır...")
+    bot_thread = threading.Thread(target=bot.start_bot, daemon=True)
+    bot_thread.start()
+else:
+    bot.safe_print("⚠️ Bot artıq başqa prosesdə çalışır (409 Conflict-in qarşısı alındı).")
+
 
 app = Flask(__name__)
 start_time = time.time()

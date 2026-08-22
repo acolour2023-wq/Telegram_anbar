@@ -13,10 +13,21 @@ from telebot import types
 # Windows konsolunda UTF-8 və emoji dəstəyini təmin edirik
 if sys.platform == "win32":
     try:
-        sys.stdout.reconfigure(encoding='utf-8')
-        sys.stderr.reconfigure(encoding='utf-8')
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
     except Exception:
         pass
+
+def safe_print(*args, **kwargs):
+    """Konsola UTF-8 və emoji simvollarını təhlükəsiz şəkildə yazan funksiya"""
+    try:
+        print(*args, **kwargs)
+    except Exception:
+        try:
+            clean_args = [str(a).encode('ascii', 'replace').decode('ascii') for a in args]
+            print(*clean_args, **kwargs)
+        except Exception:
+            pass
 
 # --- 1. AYARLAR ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8273382721:AAGh_3EKl5VLdcKttnh6HEeobdYsZnRiFBw")
@@ -35,7 +46,6 @@ def mehsul_sekli_tap(axtaris_metni):
     if not axtaris_metni or axtaris_metni == "-":
         return None
     try:
-        # Mötərizə daxilindəki səs-küyü (məs: (top 20), (yeni)) təmizləyirik
         temiz_metn = re.sub(r'\(.*?\)', '', axtaris_metni).strip()
         temiz_metn = ' '.join(temiz_metn.split())
 
@@ -44,7 +54,6 @@ def mehsul_sekli_tap(axtaris_metni):
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
         r = requests.get(url, headers=headers, timeout=2.5)
-        # Bing-in axtarılan məhsula aid təsdiqlənmiş OIP miniatür şəkli
         thumbs = re.findall(r'https?://tse[0-9]\.mm\.bing\.net/th/id/OIP\.[^"\'\s\\?&]+', r.text)
         if thumbs:
             return thumbs[0]
@@ -94,7 +103,7 @@ def fayli_tap():
 def datani_yukle():
     """
     Excel faylını yalnız dəyişiklik olduqda və ya ilk dəfə oxuyur.
-    Bu keç mexanizmi axtarış sürətini ciddi şəkildə artırır.
+    Bu keş mexanizmi axtarış sürətini ciddi şəkildə artırır.
     """
     fayl = fayli_tap()
     if not fayl:
@@ -110,7 +119,7 @@ def datani_yukle():
         DATA_CACHE["df"] = df
         DATA_CACHE["mtime"] = mtime
         DATA_CACHE["filepath"] = fayl
-        print(f"🔄 Excel yaddaşa yükləndi: {os.path.basename(fayl)} ({len(df)} sətir)")
+        safe_print(f"🔄 Excel yaddaşa yükləndi: {os.path.basename(fayl)} ({len(df)} sətir)")
         return df, None
     except Exception as e:
         return None, f"❌ Fayl oxunarkən xəta baş verdi: {e}"
@@ -148,16 +157,16 @@ def google_duymesi_duzelt(axtaris_metni):
 def bazada_axtar(axtaris_cumlesi):
     df, err = datani_yukle()
     if err:
-        return [(err, None, None)]
+        return [(err, None)]
 
     raw_query = str(axtaris_cumlesi).strip()
     query_norm = az_normalize(raw_query)
     axtarilan_sozler = query_norm.split()
 
     if not axtarilan_sozler:
-        return [("ℹ️ Xahiş olunur axtarış sözü daxil edin.", None, None)]
+        return [("ℹ️ Xahiş olunur axtarış sözü daxil edin.", None)]
 
-    print(f"🔎 Axtarılır: '{raw_query}' (Norm: {axtarilan_sozler})")
+    safe_print(f"🔎 Axtarılır: '{raw_query}' (Norm: {axtarilan_sozler})")
 
     col_map = {c: sutun_temizle(c) for c in df.columns}
 
@@ -169,7 +178,7 @@ def bazada_axtar(axtaris_cumlesi):
     qalig_col = next((orig for orig, clean in col_map.items() if 'qalig' in clean or 'qaliq' in clean or 'stok' in clean or 'say' in clean), None)
 
     if not kod_col and not ad_col: 
-        return [("❌ Excel faylında uyğun sütunlar ('KODU', 'ADI') tapılmadı.", None, None)]
+        return [("❌ Excel faylında uyğun sütunlar ('KODU', 'ADI') tapılmadı.", None)]
 
     matches = []
     records = df.to_dict('records')
@@ -191,8 +200,10 @@ def bazada_axtar(axtaris_cumlesi):
             score = 0
             if barkod_norm == query_norm or kod_norm == query_norm:
                 score = 100
-            elif barkod_norm.endswith(query_norm):
+            elif barkod_norm.endswith(query_norm) or kod_norm.endswith(query_norm):
                 score = 80
+            elif query_norm in barkod_norm or query_norm in kod_norm:
+                score = 60
             else:
                 continue
             matches.append((score, row, db_kod, db_ad, db_barkod, db_brend, db_qalig))
@@ -236,7 +247,6 @@ def bazada_axtar(axtaris_cumlesi):
         if qalig_col and goster_qalig != "-":
             caption += f"\n📊 Qalıq: {goster_qalig}"
 
-        # Google Şəkillər axtarışı üçün düymə
         google_query = db_barkod if db_barkod and db_barkod != "-" else db_ad
         google_markup = google_duymesi_duzelt(google_query)
 
@@ -259,7 +269,7 @@ def send_welcome(message):
     try:
         tg_bot.reply_to(message, metn, reply_markup=ana_menyu())
     except Exception as e:
-        print(f"❌ Welcome mesajı göndərmə xətası: {e}")
+        safe_print(f"❌ Welcome mesajı göndərmə xətası: {e}")
 
 @tg_bot.message_handler(content_types=['document'])
 def handle_document(message):
@@ -274,21 +284,17 @@ def handle_document(message):
 
         status_msg = tg_bot.reply_to(message, "🔄 Yeni Excel faylı yüklənir və anbar yenilənir, xahiş olunur gözləyin...")
 
-        # Faylı yükləyirik
         file_info = tg_bot.get_file(doc.file_id)
         downloaded_file = tg_bot.download_file(file_info.file_path)
 
-        # Mövcud fayl yolunu tapırıq və ya yeni fayl adı təyin edirik
         target_path = fayli_tap()
         if not target_path:
             current_folder = os.path.dirname(os.path.abspath(__file__))
             target_path = os.path.join(current_folder, "Son_anbar_qaliqi.xlsx")
 
-        # Faylı diskə yazırıq
         with open(target_path, 'wb') as f:
             f.write(downloaded_file)
 
-        # Keşi sıfırlayırıq və yeni faylı RAM-a yükləyirik
         DATA_CACHE["df"] = None
         DATA_CACHE["mtime"] = 0
         DATA_CACHE["filepath"] = None
@@ -305,10 +311,10 @@ def handle_document(message):
                 f"⚡ Anbar 1 saniyəyə yeniləndi və dərhal istifadəyə hazırdır!"
             )
             tg_bot.edit_message_text(cavab, message.chat.id, status_msg.message_id)
-            print(f"📥 Yeni Excel yükləndi ({user_name}): {file_name} ({len(df)} sətir)")
+            safe_print(f"📥 Yeni Excel yükləndi ({user_name}): {file_name} ({len(df)} sətir)")
 
     except Exception as e:
-        print(f"❌ Excel yükləmə xətası: {e}")
+        safe_print(f"❌ Excel yükləmə xətası: {e}")
         tg_bot.reply_to(message, f"❌ Fayl yüklənərkən xəta baş verdi: {e}")
 
 @tg_bot.message_handler(func=lambda message: True)
@@ -319,9 +325,9 @@ def handle_message(message):
         if not txt:
             return
 
-        print(f"📩 Mesaj ({user_name}): {txt}")
+        safe_print(f"📩 Mesaj ({user_name}): {txt}")
+        thread_id = getattr(message, 'message_thread_id', None)
 
-        # Menyu düymələri
         if txt == "📦 Anbar & Qiymət":
             cavab = "🔍 Axtarmaq istədiyiniz məhsulun kodunu, adını, brendini və ya barkodunu daxil edin:"
             tg_bot.reply_to(message, cavab, reply_markup=ana_menyu())
@@ -338,31 +344,39 @@ def handle_message(message):
                 tg_bot.reply_to(message, f"🗑 Yaddaş (Keş) təmizləndi!\n🔄 Excel faylı təkrar oxundu: {len(df)} sətir yükləndi.", reply_markup=ana_menyu())
             return
 
-        # Ümumi axtarış
         neticeler = bazada_axtar(txt)
 
-        for caption, inline_markup in neticeler:
-            if inline_markup:
-                tg_bot.send_message(message.chat.id, caption, reply_markup=inline_markup)
+        for res in neticeler:
+            if isinstance(res, (tuple, list)):
+                caption = res[0]
+                inline_markup = res[1] if len(res) > 1 else None
             else:
-                tg_bot.send_message(message.chat.id, caption)
+                caption = str(res)
+                inline_markup = None
+
+            if inline_markup:
+                tg_bot.send_message(message.chat.id, caption, reply_markup=inline_markup, message_thread_id=thread_id)
+            else:
+                tg_bot.send_message(message.chat.id, caption, message_thread_id=thread_id)
 
     except Exception as e:
-        print(f"❌ Göndərmə xətası: {e}")
+        safe_print(f"❌ Göndərmə xətası: {e}")
 
 def start_bot():
-    print("🚀 BOT BAŞLADILDI (7/24 Rejim - @Anbarbotu_bot)...")
+    safe_print("🚀 BOT BAŞLADILDI (7/24 Rejim - @Anbarbotu_bot)...")
+    try:
+        tg_bot.delete_webhook(drop_pending_updates=False)
+    except Exception as e:
+        safe_print(f"⚠️ Webhook təmizləmə: {e}")
+
     while True:
         try:
-            try:
-                tg_bot.delete_webhook(drop_pending_updates=True)
-            except Exception as e:
-                print(f"⚠️ Webhook təmizləmə: {e}")
-            tg_bot.infinity_polling(timeout=20, long_polling_timeout=10, skip_pending=True)
+            tg_bot.infinity_polling(timeout=20, long_polling_timeout=10)
         except Exception as e:
-            print(f"❌ Bot polling xətası (5 saniyə sonra yenidən cəhd edilir): {e}")
+            safe_print(f"❌ Bot polling xətası (5 saniyə sonra yenidən cəhd edilir): {e}")
             time.sleep(5)
 
 if __name__ == "__main__":
     start_bot()
+
 
