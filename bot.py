@@ -7,6 +7,7 @@ import time
 import shutil
 import base64
 import subprocess
+import threading
 import requests
 import pandas as pd
 import telebot
@@ -67,6 +68,9 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
 # Təsdiq gözləyən fayl yeniləmələri (user_id -> info)
 PENDING_UPLOADS = {}
 
+# Çatda göndərilən və izlənən mesaj ID-ləri (chat_id -> [message_id, ...])
+CHAT_MESSAGES = {}
+
 # Keş (Cache) mexanizmi: Excel faylını RAM-da saxlamaq üçün
 DATA_CACHE = {
     "df": None,
@@ -76,7 +80,28 @@ DATA_CACHE = {
 
 
 # --- 2. KÖMƏKÇİ FUNKSİYALAR ---
-def safe_send_message(chat_id, text, reply_markup=None, thread_id=None, reply_to_message_id=None):
+def auto_delete_message(chat_id, message_id, delay_seconds=5):
+    """Müəyyən saniyə sonra mesajı avtomatik silən köməkçi funksiya"""
+    time.sleep(delay_seconds)
+    try:
+        tg_bot.delete_message(chat_id, message_id)
+    except Exception:
+        pass
+
+def is_user_admin(chat, user_id):
+    """İstifadəçinin qrup admini olub-olmadığını yoxlayır"""
+    if chat.type == "private":
+        return True
+    if user_id in ADMIN_IDS:
+        return True
+    try:
+        member = tg_bot.get_chat_member(chat.id, user_id)
+        return member.status in ["creator", "administrator"]
+    except Exception as e:
+        safe_print(f"⚠️ Admin statusu yoxlanarkən xəta: {e}")
+        return False
+
+def safe_send_message(chat_id, text, reply_markup=None, thread_id=None, reply_to_message_id=None, track=True):
     """
     Təhlükəsiz mesaj göndərmə funksiyası.
     İstənilən Telegram API, şəbəkə və ya mövzu (topic) xətasında dərhal fallback tətbiq edərək 
@@ -85,27 +110,38 @@ def safe_send_message(chat_id, text, reply_markup=None, thread_id=None, reply_to
     if not text:
         return None
     
+    sent_msg = None
     # 1-ci cəhd: Mövzu (thread_id) və Inline Markup düymələri ilə
     try:
         if reply_to_message_id:
-            return tg_bot.send_message(chat_id, text, reply_markup=reply_markup, message_thread_id=thread_id, reply_to_message_id=reply_to_message_id)
+            sent_msg = tg_bot.send_message(chat_id, text, reply_markup=reply_markup, message_thread_id=thread_id, reply_to_message_id=reply_to_message_id)
         else:
-            return tg_bot.send_message(chat_id, text, reply_markup=reply_markup, message_thread_id=thread_id)
+            sent_msg = tg_bot.send_message(chat_id, text, reply_markup=reply_markup, message_thread_id=thread_id)
     except Exception as e1:
         safe_print(f"⚠️ İlk mesaj göndərmə cəhdi uğursuz oldu: {e1}")
 
     # 2-ci cəhd: Düyməsiz (plain text) olaraq mövzuya göndərmə
-    try:
-        return tg_bot.send_message(chat_id, text, message_thread_id=thread_id)
-    except Exception as e2:
-        safe_print(f"⚠️ Düyməsiz göndərmə cəhdi uğursuz oldu: {e2}")
+    if not sent_msg:
+        try:
+            sent_msg = tg_bot.send_message(chat_id, text, message_thread_id=thread_id)
+        except Exception as e2:
+            safe_print(f"⚠️ Düyməsiz göndərmə cəhdi uğursuz oldu: {e2}")
 
     # 3-cü cəhd: Birbaşa əsas çata düyməsiz və mövzusuz göndərmə (son çətir)
-    try:
-        return tg_bot.send_message(chat_id, text)
-    except Exception as e3:
-        safe_print(f"❌ Mesaj heç bir yolla göndərilə bilmədi: {e3}")
-        return None
+    if not sent_msg:
+        try:
+            sent_msg = tg_bot.send_message(chat_id, text)
+        except Exception as e3:
+            safe_print(f"❌ Mesaj heç bir yolla göndərilə bilmədi: {e3}")
+            return None
+
+    if sent_msg and track and hasattr(sent_msg, 'message_id'):
+        CHAT_MESSAGES.setdefault(chat_id, []).append(sent_msg.message_id)
+        if len(CHAT_MESSAGES[chat_id]) > 100:
+            CHAT_MESSAGES[chat_id] = CHAT_MESSAGES[chat_id][-100:]
+
+    return sent_msg
+
 
 def az_normalize(text):
     """
@@ -180,10 +216,12 @@ def temizle(deyer):
 
 def ana_menyu():
     """Botun əsas düymələr menyusu"""
-    markup = types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
+    markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     btn_anbar = types.KeyboardButton("📦 Anbar & Qiymət")
+    btn_temizle = types.KeyboardButton("🧹 Çatı Təmizlə")
     btn_yaddas = types.KeyboardButton("🗑 Yaddaşı Təmizlə")
-    markup.add(btn_anbar, btn_yaddas)
+    markup.add(btn_anbar)
+    markup.row(btn_temizle, btn_yaddas)
     return markup
 
 def google_duymesi_duzelt(axtaris_metni):
@@ -309,7 +347,8 @@ def send_welcome(message):
     metn = (
         "👋 Salam! Məhsul axtarış botuna xoş gəldiniz.\n\n"
         "🔍 Axtarmaq istədiyiniz məhsulun kodunu, adını, brendini və ya barkodunu (son 4 rəqəmini) yazın.\n"
-        "📁 Yeni Excel faylını bota göndərərək anbarı anında yeniləyə bilərsiniz.\n\n"
+        "📁 Yeni Excel faylını bota göndərərək anbarı anında yeniləyə bilərsiniz (Admin şifrəsi ilə).\n"
+        "🧹 /temizle — Qrup adminləri üçün çatı və köhnə axtarışları təmizləmək əmri.\n\n"
         "Aşağıdakı menyu düymələrindən istifadə edə bilərsiniz:"
     )
     try:
@@ -317,6 +356,78 @@ def send_welcome(message):
         safe_send_message(message.chat.id, metn, reply_markup=ana_menyu(), thread_id=thread_id, reply_to_message_id=message.message_id)
     except Exception as e:
         safe_print(f"❌ Welcome mesajı göndərmə xətası: {e}")
+
+@tg_bot.message_handler(commands=['temizle', 'clear', 'sil', 'clean'])
+def handle_clear_chat(message):
+    """Qrup adminləri üçün çatı və köhnə axtarışları təmizləyən əmr"""
+    try:
+        user_id = message.from_user.id
+        user_name = message.from_user.first_name or "İstifadəçi"
+        chat_id = message.chat.id
+        thread_id = getattr(message, 'message_thread_id', None)
+
+        # 1. Qrup admini olub-olmadığını yoxlayırıq
+        if not is_user_admin(message.chat, user_id):
+            warn_msg = safe_send_message(
+                chat_id,
+                "⛔ **İcazə verilmədi!**\nÇatı və köhnə axtarışları təmizləmək hüququ yalnız qrup adminlərinə məxsusdur.",
+                thread_id=thread_id,
+                reply_to_message_id=message.message_id,
+                track=False
+            )
+            if warn_msg and hasattr(warn_msg, 'message_id'):
+                threading.Thread(target=auto_delete_message, args=(chat_id, warn_msg.message_id, 6), daemon=True).start()
+            return
+
+        # 2. Silinəcək mesaj sayını müəyyənləşdiririk (məs: /temizle 30, standart 50)
+        count = 50
+        parts = (message.text or "").split()
+        if len(parts) > 1 and parts[1].isdigit():
+            count = min(int(parts[1]), 100)
+
+        safe_print(f"🧹 Çat təmizləmə başladı: Chat {chat_id}, Admin: {user_name} ({user_id}), Say: {count}")
+
+        # Silinəcək unikal mesaj ID-ləri
+        ids_to_delete = set()
+
+        # Bot tərəfindən göndərilmiş və izlənmiş bütün mesajlar
+        for mid in CHAT_MESSAGES.get(chat_id, []):
+            ids_to_delete.add(mid)
+        CHAT_MESSAGES[chat_id] = []
+
+        # Əmrin göndərildiyi cari mesaj
+        ids_to_delete.add(message.message_id)
+
+        # Əmrdən əvvəlki son 'count' sayda mesajı da əhatə edirik
+        for offset in range(1, count + 1):
+            ids_to_delete.add(message.message_id - offset)
+
+        deleted_count = 0
+        for mid in sorted(ids_to_delete, reverse=True):
+            try:
+                tg_bot.delete_message(chat_id, mid)
+                deleted_count += 1
+            except Exception:
+                pass
+
+        # Uğurlu təmizlənmə bildirişi
+        info_msg = safe_send_message(
+            chat_id,
+            f"🧹 **ÇAT TƏMİZLƏNDİ!** ✨\n\n"
+            f"👤 Admin: {user_name}\n"
+            f"🗑️ Köhnə axtarışlar və mesajlar silindi ({deleted_count} mesaj yoxlanıldı).\n"
+            f"🔄 Axtarış tarixçəsi sıfırlandı!",
+            thread_id=thread_id,
+            track=False
+        )
+
+        # 5 saniyə sonra təsdiq bildirişi də avtomatik silinir və çat tərtəmiz qalır
+        if info_msg and hasattr(info_msg, 'message_id'):
+            threading.Thread(target=auto_delete_message, args=(chat_id, info_msg.message_id, 5), daemon=True).start()
+
+    except Exception as e:
+        safe_print(f"❌ Çat təmizləmə xətası: {e}")
+
 
 def github_fayli_yenile(excel_fayl_yolu, user_name="Admin"):
     """
@@ -567,12 +678,20 @@ def handle_message(message):
                     )
                 return
 
+        # Gələn mesajın ID-sini izləyirik
+        CHAT_MESSAGES.setdefault(message.chat.id, []).append(message.message_id)
+
         safe_print(f"📩 Mesaj ({user_name}): {txt}")
+
+        if txt in ["🧹 Çatı Təmizlə", "çatı təmizlə", "chati temizle", "/temizle", "/clear", "/sil"]:
+            handle_clear_chat(message)
+            return
 
         if txt == "📦 Anbar & Qiymət":
             cavab = "🔍 Axtarmaq istədiyiniz məhsulun kodunu, adını, brendini və ya barkodunu daxil edin:"
             safe_send_message(message.chat.id, cavab, reply_markup=ana_menyu(), thread_id=thread_id, reply_to_message_id=message.message_id)
             return
+
 
         if txt == "🗑 Yaddaşı Təmizlə":
             DATA_CACHE["df"] = None

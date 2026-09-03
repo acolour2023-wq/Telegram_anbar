@@ -81,7 +81,22 @@ def run_tests():
         print("  ❌ PENDING_UPLOADS mövcud deyil!")
         failed += 1
 
+    if hasattr(bot, "CHAT_MESSAGES") and isinstance(bot.CHAT_MESSAGES, dict):
+        print("  ✅ CHAT_MESSAGES çat izləmə sistemi aktivdir.")
+        passed += 1
+    else:
+        print("  ❌ CHAT_MESSAGES mövcud deyil!")
+        failed += 1
+
+    if hasattr(bot, "handle_clear_chat") and callable(bot.handle_clear_chat):
+        print("  ✅ handle_clear_chat qrup təmizləmə funksiyası aktivdir.")
+        passed += 1
+    else:
+        print("  ❌ handle_clear_chat funksiyası tapılmadı!")
+        failed += 1
+
     print("\n" + "="*40)
+
     print(f"📊 TEST NƏTİCƏSİ: {passed} Uğurlu, {failed} Xətalı")
     if failed == 0:
         print("🎉 BÜTÜN TESTLƏR UĞURLA KEÇDİ!")
