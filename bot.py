@@ -79,20 +79,15 @@ SCANNER_URL = os.environ.get("SCANNER_URL", "https://telegram-anbar-11y6.onrende
 
 # Dore Group MMC - Əlaqə və Şöbələr Məlumatı
 CONTACTS_INFO = (
-    "🏢 **DORE GROUP MMC — ƏLAQƏ VƏ ŞÖBƏLƏR** 📞\n"
+    "🏢 **DORE GROUP MMC — ƏLAQƏ VƏ ANBAR** 📞\n"
     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
     "📦 **Anbar Müdiri / Təhvil-Təslim:**\n"
-    "📞 `+994 50 200 10 20` *(Zəng üçün toxunun)*\n\n"
-    "🧾 **Mühasibatlıq / Faktura & Qaimə:**\n"
-    "📞 `+994 55 300 40 50`\n\n"
-    "🚚 **Logistika & Sifarişlərin Çatdırılması:**\n"
-    "📞 `+994 70 500 60 70`\n\n"
-    "💼 **Baş Satış Meneceri:**\n"
-    "📞 `+994 51 700 80 90`\n"
+    "📞 `+994 70 806 03 13` *(Zəng üçün toxunun)*\n"
     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    "📍 **Ünvan:** Bakı şəhəri, Baş Anbar\n"
+    "📍 **Ünvan:** Gəncə şəhəri, Baş Anbar\n"
     "⏰ **İş rejimi:** 09:00 – 18:00 (Bazar ertəsi – Şənbə)"
 )
+
 
 # Keş (Cache) mexanizmi: Excel faylını RAM-da saxlamaq üçün
 DATA_CACHE = {
