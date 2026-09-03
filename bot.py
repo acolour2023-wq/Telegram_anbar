@@ -379,13 +379,17 @@ def handle_clear_chat(message):
                 threading.Thread(target=auto_delete_message, args=(chat_id, warn_msg.message_id, 6), daemon=True).start()
             return
 
-        # 2. Silinəcək mesaj sayını müəyyənləşdiririk (məs: /temizle 30, standart 50)
+        # 2. Silinəcək mesaj sayını və 'full' rejimini müəyyənləşdiririk
         count = 50
-        parts = (message.text or "").split()
-        if len(parts) > 1 and parts[1].isdigit():
-            count = min(int(parts[1]), 100)
+        is_full = False
+        parts = (message.text or "").lower().split()
+        if any(p in parts for p in ["full", "tam", "hamisi", "0", "sıfırla", "sifirla"]):
+            is_full = True
+            count = 200  # Full rejimdə son 200 mesajı dərhal əhatə edir
+        elif len(parts) > 1 and parts[1].isdigit():
+            count = min(int(parts[1]), 200)
 
-        safe_print(f"🧹 Çat təmizləmə başladı: Chat {chat_id}, Admin: {user_name} ({user_id}), Say: {count}")
+        safe_print(f"🧹 Çat təmizləmə başladı: Chat {chat_id}, Admin: {user_name} ({user_id}), Say: {count}, Full: {is_full}")
 
         # Silinəcək unikal mesaj ID-ləri
         ids_to_delete = set()
@@ -410,16 +414,28 @@ def handle_clear_chat(message):
             except Exception:
                 pass
 
-        # Uğurlu təmizlənmə bildirişi
-        info_msg = safe_send_message(
-            chat_id,
-            f"🧹 **ÇAT TƏMİZLƏNDİ!** ✨\n\n"
-            f"👤 Admin: {user_name}\n"
-            f"🗑️ Köhnə axtarışlar və mesajlar silindi ({deleted_count} mesaj yoxlanıldı).\n"
-            f"🔄 Axtarış tarixçəsi sıfırlandı!",
-            thread_id=thread_id,
-            track=False
-        )
+        if is_full:
+            # Baza keşini və axtarış yaddaşını da tam sıfırlayırıq
+            DATA_CACHE["df"] = None
+            DATA_CACHE["mtime"] = 0
+            DATA_CACHE["filepath"] = None
+            datani_yukle()
+
+            info_text = (
+                f"🧹 **ÇAT VƏ AXTARIŞLAR TAM SIFIRLANDI! (FULL RESET)** 0️⃣✨\n\n"
+                f"👤 Admin: {user_name}\n"
+                f"🗑️ Bütün köhnə axtarışlar və mesajlar silindi ({deleted_count} mesaj təmizləndi).\n"
+                f"0️⃣ Axtarış bazası və yaddaş tam sıfırlandı!"
+            )
+        else:
+            info_text = (
+                f"🧹 **ÇAT TƏMİZLƏNDİ!** ✨\n\n"
+                f"👤 Admin: {user_name}\n"
+                f"🗑️ Köhnə axtarışlar və mesajlar silindi ({deleted_count} mesaj yoxlanıldı).\n"
+                f"🔄 Axtarış tarixçəsi sıfırlandı!"
+            )
+
+        info_msg = safe_send_message(chat_id, info_text, thread_id=thread_id, track=False)
 
         # 5 saniyə sonra təsdiq bildirişi də avtomatik silinir və çat tərtəmiz qalır
         if info_msg and hasattr(info_msg, 'message_id'):
@@ -681,11 +697,11 @@ def handle_message(message):
         # Gələn mesajın ID-sini izləyirik
         CHAT_MESSAGES.setdefault(message.chat.id, []).append(message.message_id)
 
-        safe_print(f"📩 Mesaj ({user_name}): {txt}")
-
-        if txt in ["🧹 Çatı Təmizlə", "çatı təmizlə", "chati temizle", "/temizle", "/clear", "/sil"]:
+        txt_low = txt.lower()
+        if any(txt_low.startswith(cmd) for cmd in ["/temizle", "temizle", "/clear", "clear", "/sil", "sil", "🧹 çatı təmizlə", "çatı təmizlə", "chati temizle"]):
             handle_clear_chat(message)
             return
+
 
         if txt == "📦 Anbar & Qiymət":
             cavab = "🔍 Axtarmaq istədiyiniz məhsulun kodunu, adını, brendini və ya barkodunu daxil edin:"
