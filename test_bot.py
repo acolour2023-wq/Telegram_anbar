@@ -95,7 +95,29 @@ def run_tests():
         print("  ❌ handle_clear_chat funksiyası tapılmadı!")
         failed += 1
 
+    if hasattr(bot, "SCANNER_URL") and bot.SCANNER_URL:
+        print(f"  ✅ SCANNER_URL WebApp konfiqurasiya edilib: {bot.SCANNER_URL}")
+        passed += 1
+    else:
+        print("  ❌ SCANNER_URL tapılmadı!")
+        failed += 1
+
+    if hasattr(bot, "CONTACTS_INFO") and bot.CONTACTS_INFO:
+        print("  ✅ CONTACTS_INFO əlaqə və şöbələr məlumatı aktivdir.")
+        passed += 1
+    else:
+        print("  ❌ CONTACTS_INFO tapılmadı!")
+        failed += 1
+
+    if hasattr(bot, "PENDING_ANNOUNCEMENTS") and isinstance(bot.PENDING_ANNOUNCEMENTS, dict):
+        print("  ✅ PENDING_ANNOUNCEMENTS qrup elan sistemi aktivdir.")
+        passed += 1
+    else:
+        print("  ❌ PENDING_ANNOUNCEMENTS tapılmadı!")
+        failed += 1
+
     print("\n" + "="*40)
+
 
     print(f"📊 TEST NƏTİCƏSİ: {passed} Uğurlu, {failed} Xətalı")
     if failed == 0:

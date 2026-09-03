@@ -68,8 +68,31 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
 # Təsdiq gözləyən fayl yeniləmələri (user_id -> info)
 PENDING_UPLOADS = {}
 
+# Təsdiq gözləyən qrup elanları (user_id -> info)
+PENDING_ANNOUNCEMENTS = {}
+
 # Çatda göndərilən və izlənən mesaj ID-ləri (chat_id -> [message_id, ...])
 CHAT_MESSAGES = {}
+
+# Barkod Kamera Skaneri WebApp URL (Render üzərindən)
+SCANNER_URL = os.environ.get("SCANNER_URL", "https://telegram-anbar-11y6.onrender.com/scanner")
+
+# Dore Group MMC - Əlaqə və Şöbələr Məlumatı
+CONTACTS_INFO = (
+    "🏢 **DORE GROUP MMC — ƏLAQƏ VƏ ŞÖBƏLƏR** 📞\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "📦 **Anbar Müdiri / Təhvil-Təslim:**\n"
+    "📞 `+994 50 200 10 20` *(Zəng üçün toxunun)*\n\n"
+    "🧾 **Mühasibatlıq / Faktura & Qaimə:**\n"
+    "📞 `+994 55 300 40 50`\n\n"
+    "🚚 **Logistika & Sifarişlərin Çatdırılması:**\n"
+    "📞 `+994 70 500 60 70`\n\n"
+    "💼 **Baş Satış Meneceri:**\n"
+    "📞 `+994 51 700 80 90`\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "📍 **Ünvan:** Bakı şəhəri, Baş Anbar\n"
+    "⏰ **İş rejimi:** 09:00 – 18:00 (Bazar ertəsi – Şənbə)"
+)
 
 # Keş (Cache) mexanizmi: Excel faylını RAM-da saxlamaq üçün
 DATA_CACHE = {
@@ -77,6 +100,7 @@ DATA_CACHE = {
     "mtime": 0,
     "filepath": None
 }
+
 
 
 # --- 2. KÖMƏKÇİ FUNKSİYALAR ---
@@ -101,31 +125,34 @@ def is_user_admin(chat, user_id):
         safe_print(f"⚠️ Admin statusu yoxlanarkən xəta: {e}")
         return False
 
-def safe_send_message(chat_id, text, reply_markup=None, thread_id=None, reply_to_message_id=None, track=True):
+def safe_send_message(chat_id, text, reply_markup=None, thread_id=None, reply_to_message_id=None, track=True, parse_mode="Markdown"):
     """
     Təhlükəsiz mesaj göndərmə funksiyası.
-    İstənilən Telegram API, şəbəkə və ya mövzu (topic) xətasında dərhal fallback tətbiq edərək 
+    İstənilən Telegram API, şəbəkə, Markdown və ya mövzu (topic) xətasında dərhal fallback tətbiq edərək 
     istifadəçinin cavabsız qalmasının qarşısını alır.
     """
     if not text:
         return None
     
     sent_msg = None
-    # 1-ci cəhd: Mövzu (thread_id) və Inline Markup düymələri ilə
+    # 1-ci cəhd: Markdown formatı, Mövzu (thread_id) və Inline Markup düymələri ilə
     try:
         if reply_to_message_id:
-            sent_msg = tg_bot.send_message(chat_id, text, reply_markup=reply_markup, message_thread_id=thread_id, reply_to_message_id=reply_to_message_id)
+            sent_msg = tg_bot.send_message(chat_id, text, reply_markup=reply_markup, message_thread_id=thread_id, reply_to_message_id=reply_to_message_id, parse_mode=parse_mode)
         else:
-            sent_msg = tg_bot.send_message(chat_id, text, reply_markup=reply_markup, message_thread_id=thread_id)
+            sent_msg = tg_bot.send_message(chat_id, text, reply_markup=reply_markup, message_thread_id=thread_id, parse_mode=parse_mode)
     except Exception as e1:
-        safe_print(f"⚠️ İlk mesaj göndərmə cəhdi uğursuz oldu: {e1}")
+        safe_print(f"⚠️ İlk mesaj göndərmə cəhdi (Markdown) uğursuz oldu: {e1}")
 
-    # 2-ci cəhd: Düyməsiz (plain text) olaraq mövzuya göndərmə
+    # 2-ci cəhd: Formatlaşdırmasız (plain text) olaraq mövzuya göndərmə (Markdown xətalarına qarşı qoruma)
     if not sent_msg:
         try:
-            sent_msg = tg_bot.send_message(chat_id, text, message_thread_id=thread_id)
+            if reply_to_message_id:
+                sent_msg = tg_bot.send_message(chat_id, text, reply_markup=reply_markup, message_thread_id=thread_id, reply_to_message_id=reply_to_message_id)
+            else:
+                sent_msg = tg_bot.send_message(chat_id, text, reply_markup=reply_markup, message_thread_id=thread_id)
         except Exception as e2:
-            safe_print(f"⚠️ Düyməsiz göndərmə cəhdi uğursuz oldu: {e2}")
+            safe_print(f"⚠️ Düz mətn göndərmə cəhdi uğursuz oldu: {e2}")
 
     # 3-cü cəhd: Birbaşa əsas çata düyməsiz və mövzusuz göndərmə (son çətir)
     if not sent_msg:
@@ -141,6 +168,7 @@ def safe_send_message(chat_id, text, reply_markup=None, thread_id=None, reply_to
             CHAT_MESSAGES[chat_id] = CHAT_MESSAGES[chat_id][-100:]
 
     return sent_msg
+
 
 
 def az_normalize(text):
@@ -214,13 +242,20 @@ def temizle(deyer):
         s = s[:-2]
     return s
 
-def ana_menyu():
+def ana_menyu(is_private=False):
     """Botun əsas düymələr menyusu"""
     markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     btn_anbar = types.KeyboardButton("📦 Anbar & Qiymət")
+    if is_private:
+        btn_scanner = types.KeyboardButton("📷 Barkod Skaneri", web_app=types.WebAppInfo(url=SCANNER_URL))
+    else:
+        btn_scanner = types.KeyboardButton("📷 Barkod Skaneri")
+    btn_elan = types.KeyboardButton("📢 Qrupa Elan")
+    btn_elaqe = types.KeyboardButton("☎️ Əlaqə & Şöbələr")
     btn_temizle = types.KeyboardButton("🧹 Çatı Təmizlə")
     btn_yaddas = types.KeyboardButton("🗑 Yaddaşı Təmizlə")
-    markup.add(btn_anbar)
+    markup.row(btn_anbar, btn_scanner)
+    markup.row(btn_elan, btn_elaqe)
     markup.row(btn_temizle, btn_yaddas)
     return markup
 
@@ -310,7 +345,7 @@ def bazada_axtar(axtaris_cumlesi):
             qiymet_raw = str(row.get(qiymet_col, "0")).replace(',', '.') if qiymet_col else "0"
             try:
                 qiymet_val = float(qiymet_raw)
-                qiymet = f"{qiymet_val:.2f}".rstrip('0').rstrip('.')
+                qiymet = f"{qiymet_val:.2f}"
             except Exception:
                 qiymet = qiymet_raw
 
@@ -318,20 +353,33 @@ def bazada_axtar(axtaris_cumlesi):
             goster_barkod = db_barkod if db_barkod and db_barkod.lower() != "nan" else "-"
             goster_qalig = db_qalig if db_qalig and db_qalig.lower() != "nan" else "-"
 
-            caption = (
-                f"🆔 Kod: {db_kod}\n"
-                f"📦 Məhsul: {db_ad}\n"
-                f"🏷️ Brend: {goster_brend}\n"
-                f"🏷️ Qiymət: {qiymet} AZN\n"
-                f"📊 Barkod: {goster_barkod}"
-            )
+            qalig_line = ""
             if qalig_col and goster_qalig != "-":
-                caption += f"\n📊 Qalıq: {goster_qalig}"
+                try:
+                    q_num = float(str(goster_qalig).replace(',', '.'))
+                    if q_num <= 0:
+                        qalig_line = "\n🔴 **Qalıq:** Bitib (0 ədəd)"
+                    elif q_num <= 5:
+                        qalig_line = f"\n🟡 **Qalıq:** {goster_qalig} ⚠️ *(Az qalıb!)*"
+                    else:
+                        qalig_line = f"\n🟢 **Qalıq:** {goster_qalig}"
+                except Exception:
+                    qalig_line = f"\n📊 **Qalıq:** {goster_qalig}"
+
+            caption = (
+                f"🆔 **Kod:** `{db_kod}`\n"
+                f"📦 **Məhsul:** {db_ad}\n"
+                f"🏷️ **Brend:** {goster_brend}\n"
+                f"💵 **Qiymət:** **{qiymet} AZN**\n"
+                f"📊 **Barkod:** `{goster_barkod}`"
+                f"{qalig_line}"
+            )
 
             google_query = db_barkod if db_barkod and db_barkod != "-" else db_ad
             google_markup = google_duymesi_duzelt(google_query)
 
             neticeler.append((caption, google_markup))
+
 
         if toplam_say > 10:
             neticeler.append((f"ℹ️ Cəmi {toplam_say} məhsul tapıldı. İlk 10-u göstərildi.\nDaha dəqiq axtarış üçün adı və ya barkodu tam daxil edin.", None))
@@ -345,17 +393,42 @@ def bazada_axtar(axtaris_cumlesi):
 @tg_bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     metn = (
-        "👋 Salam! Məhsul axtarış botuna xoş gəldiniz.\n\n"
-        "🔍 Axtarmaq istədiyiniz məhsulun kodunu, adını, brendini və ya barkodunu (son 4 rəqəmini) yazın.\n"
-        "📁 Yeni Excel faylını bota göndərərək anbarı anında yeniləyə bilərsiniz (Admin şifrəsi ilə).\n"
-        "🧹 /temizle — Qrup adminləri üçün çatı və köhnə axtarışları təmizləmək əmri.\n\n"
-        "Aşağıdakı menyu düymələrindən istifadə edə bilərsiniz:"
+        "👋 **Salam! Dore Group Məhsul & Anbar Botuna Xoş Gəldiniz.**\n\n"
+        "🔍 **Axtarış:** Məhsulun kodunu, adını, brendini və ya barkodun son 4 rəqəmini yazın.\n"
+        "📷 **Skaner:** Aşağıdakı `📷 Barkod Skaneri` düyməsi ilə kameranı açıb barkodu dərhal oxuda bilərsiniz.\n"
+        "📢 **Qrupa Elan:** Adminlər üçün rəsmi qrup bildirişi göndərmək imkanı.\n"
+        "☎️ **Əlaqə:** Şirkətin məsul şöbələrinin əlaqə nömrələri.\n"
+        "🧹 **Təmizlə:** `/temizle` və ya `temizle full` — çatı və köhnə axtarışları sıfırlamaq.\n"
+        "📁 **Excel:** Yeni faylı bota göndərərək bazanı anında yeniləyə bilərsiniz (Admin şifrəsi ilə)."
     )
     try:
         thread_id = getattr(message, 'message_thread_id', None)
-        safe_send_message(message.chat.id, metn, reply_markup=ana_menyu(), thread_id=thread_id, reply_to_message_id=message.message_id)
+        is_priv = (message.chat.type == "private")
+        safe_send_message(message.chat.id, metn, reply_markup=ana_menyu(is_priv), thread_id=thread_id, reply_to_message_id=message.message_id)
     except Exception as e:
         safe_print(f"❌ Welcome mesajı göndərmə xətası: {e}")
+
+@tg_bot.message_handler(content_types=['web_app_data'])
+def handle_web_app_data(message):
+    """Kamera ilə skan edilmiş barkodu WebApp-dan qəbul edir və dərhal axtarış edir"""
+    try:
+        barcode = (message.web_app_data.data or "").strip()
+        safe_print(f"📷 WebApp Kamera Skanı qəbul olundu: {barcode}")
+        thread_id = getattr(message, 'message_thread_id', None)
+        safe_send_message(message.chat.id, f"📷 **Skan edildi:** `{barcode}`\n🔍 Məlumat axtarılır...", thread_id=thread_id)
+
+        neticeler = bazada_axtar(barcode)
+        for res in neticeler:
+            if isinstance(res, (tuple, list)):
+                caption = str(res[0]) if len(res) > 0 else "ℹ️ Məlumat mövcuddur."
+                inline_markup = res[1] if len(res) > 1 and isinstance(res[1], types.InlineKeyboardMarkup) else None
+            else:
+                caption = str(res)
+                inline_markup = None
+            safe_send_message(message.chat.id, caption, reply_markup=inline_markup, thread_id=thread_id)
+    except Exception as e:
+        safe_print(f"❌ WebApp data xətası: {e}")
+
 
 @tg_bot.message_handler(commands=['temizle', 'clear', 'sil', 'clean'])
 def handle_clear_chat(message):
@@ -694,6 +767,38 @@ def handle_message(message):
                     )
                 return
 
+        # 2. Gözləyən Qrup Elanı Mətni
+        if user_id in PENDING_ANNOUNCEMENTS:
+
+            ann_info = PENDING_ANNOUNCEMENTS[user_id]
+            del PENDING_ANNOUNCEMENTS[user_id]
+
+            if txt.lower() in ["/cancel", "cancel", "imtina", "leqv", "ləğv"]:
+                safe_send_message(message.chat.id, "❌ Qrup elanı göndərilməsi ləğv edildi.", thread_id=thread_id, reply_to_message_id=message.message_id)
+                return
+
+            now_str = time.strftime("%d.%m.%Y %H:%M")
+            elan_metn = (
+                "📢 **DORE GROUP MMC — RƏSMİ BİLDİRİŞ** ⚠️\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"{txt}\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"👤 **Elan verən:** {user_name}\n"
+                f"🕒 **Tarix:** {now_str}"
+            )
+            target_chat_id = ann_info.get("chat_id", message.chat.id)
+            target_thread_id = ann_info.get("thread_id")
+            sent_msg = safe_send_message(target_chat_id, elan_metn, thread_id=target_thread_id)
+            try:
+                if sent_msg and hasattr(sent_msg, 'message_id') and message.chat.type in ['group', 'supergroup']:
+                    tg_bot.pin_chat_message(target_chat_id, sent_msg.message_id)
+            except Exception:
+                pass
+
+            if target_chat_id != message.chat.id:
+                safe_send_message(message.chat.id, "✅ Elan qrupa uğurla göndərildi!", thread_id=thread_id, reply_to_message_id=message.message_id)
+            return
+
         # Gələn mesajın ID-sini izləyirik
         CHAT_MESSAGES.setdefault(message.chat.id, []).append(message.message_id)
 
@@ -702,11 +807,57 @@ def handle_message(message):
             handle_clear_chat(message)
             return
 
+        is_priv = (message.chat.type == "private")
+
+        if txt in ["☎️ Əlaqə & Şöbələr", "əlaqə", "elaqe", "/elaqe", "/kontakt"]:
+            safe_send_message(message.chat.id, CONTACTS_INFO, reply_markup=ana_menyu(is_priv), thread_id=thread_id, reply_to_message_id=message.message_id)
+            return
+
+        if txt in ["📢 Qrupa Elan", "qrupa elan", "/elan"]:
+            if not is_user_admin(message.chat, user_id):
+                warn_msg = safe_send_message(
+                    message.chat.id,
+                    "⛔ **İcazə verilmədi!**\nQrupa rəsmi elan göndərmək hüququ yalnız adminlərə məxsusdur.",
+                    thread_id=thread_id,
+                    reply_to_message_id=message.message_id,
+                    track=False
+                )
+                if warn_msg and hasattr(warn_msg, 'message_id'):
+                    threading.Thread(target=auto_delete_message, args=(message.chat.id, warn_msg.message_id, 6), daemon=True).start()
+                return
+
+            PENDING_ANNOUNCEMENTS[user_id] = {
+                "chat_id": message.chat.id,
+                "thread_id": thread_id
+            }
+            safe_send_message(
+                message.chat.id,
+                "📢 **Rəsmi Qrup Elanı Rejimi**\n\n"
+                "Zəhmət olmasa qrupa göndəriləcək elan mətnini yazın:\n\n"
+                "*(Ləğv etmək üçün /cancel yazın)*",
+                thread_id=thread_id,
+                reply_to_message_id=message.message_id
+            )
+            return
+
+        if txt in ["📷 Barkod Skaneri", "barkod skaneri", "/skaner", "/scanner"]:
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("📷 Kameranı Aç və Skan Et", web_app=types.WebAppInfo(url=SCANNER_URL)))
+            safe_send_message(
+                message.chat.id,
+                "📷 **Kamera ilə Barkod Skaneri**\n\n"
+                "Aşağıdakı düyməyə toxunaraq telefonunuzun kamerasını açın və məhsulun barkodunu skan edin:",
+                reply_markup=markup,
+                thread_id=thread_id,
+                reply_to_message_id=message.message_id
+            )
+            return
 
         if txt == "📦 Anbar & Qiymət":
             cavab = "🔍 Axtarmaq istədiyiniz məhsulun kodunu, adını, brendini və ya barkodunu daxil edin:"
-            safe_send_message(message.chat.id, cavab, reply_markup=ana_menyu(), thread_id=thread_id, reply_to_message_id=message.message_id)
+            safe_send_message(message.chat.id, cavab, reply_markup=ana_menyu(is_priv), thread_id=thread_id, reply_to_message_id=message.message_id)
             return
+
 
 
         if txt == "🗑 Yaddaşı Təmizlə":

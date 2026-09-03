@@ -2,7 +2,7 @@ import os
 import threading
 import time
 import socket
-from flask import Flask, render_template_string, jsonify
+from flask import Flask, render_template_string, jsonify, request
 import bot
 
 def acquire_bot_lock():
@@ -161,6 +161,260 @@ HTML_TEMPLATE = """
 </html>
 """
 
+SCANNER_HTML = """
+
+<!DOCTYPE html>
+<html lang="az">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>📷 Barkod Skaneri - Dore Group</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&display=swap" rel="stylesheet">
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Outfit', sans-serif;
+            background: #0f172a;
+            color: #f8fafc;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 16px;
+        }
+        .header {
+            width: 100%;
+            max-width: 450px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        h1 { font-size: 1.25rem; font-weight: 700; color: #38bdf8; display: flex; align-items: center; gap: 8px; }
+        #reader {
+            width: 100%;
+            max-width: 450px;
+            border-radius: 20px;
+            overflow: hidden;
+            border: 2px solid #38bdf8;
+            box-shadow: 0 10px 25px rgba(56, 189, 248, 0.2);
+            background: #000;
+        }
+        .result-card {
+            width: 100%;
+            max-width: 450px;
+            margin-top: 16px;
+            background: rgba(30, 41, 59, 0.9);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 18px;
+            padding: 18px;
+            display: none;
+            animation: slideUp 0.3s ease;
+        }
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(15px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .product-title { font-size: 1.1rem; font-weight: 700; margin-bottom: 8px; color: #fff; }
+        .info-row { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 0.95rem; }
+        .label { color: #94a3b8; }
+        .val { font-weight: 600; color: #e2e8f0; }
+        .price { color: #4ade80; font-size: 1.15rem; font-weight: 700; }
+        .stock-badge { padding: 3px 8px; border-radius: 6px; font-size: 0.85rem; font-weight: 600; }
+        .stock-good { background: rgba(34, 197, 94, 0.2); color: #4ade80; }
+        .stock-low { background: rgba(234, 179, 8, 0.2); color: #facc15; }
+        .stock-zero { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+        .btn-action {
+            display: block;
+            width: 100%;
+            padding: 12px;
+            margin-top: 12px;
+            background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+            color: #fff;
+            text-align: center;
+            border-radius: 12px;
+            text-decoration: none;
+            font-weight: 600;
+            border: none;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        .btn-action:hover { opacity: 0.9; transform: scale(0.99); }
+        .btn-rescan {
+            background: rgba(255, 255, 255, 0.1);
+            color: #cbd5e1;
+            margin-top: 8px;
+        }
+        .status-pill {
+            margin-top: 10px;
+            font-size: 0.85rem;
+            color: #64748b;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📷 Barkod Skaneri</h1>
+        <span style="font-size: 0.85rem; color: #94a3b8;">Dore Group MMC</span>
+    </div>
+
+    <div id="reader"></div>
+
+    <div class="result-card" id="resultCard">
+        <div class="product-title" id="pName">Məhsul Adı</div>
+        <div class="info-row">
+            <span class="label">🏷️ Brend:</span>
+            <span class="val" id="pBrand">-</span>
+        </div>
+        <div class="info-row">
+            <span class="label">🆔 Kod:</span>
+            <span class="val" id="pCode">-</span>
+        </div>
+        <div class="info-row">
+            <span class="label">📊 Barkod:</span>
+            <span class="val" id="pBarcode">-</span>
+        </div>
+        <div class="info-row">
+            <span class="label">💵 Qiymət:</span>
+            <span class="price" id="pPrice">0.00 AZN</span>
+        </div>
+        <div class="info-row">
+            <span class="label">📦 Qalıq:</span>
+            <span id="pStockBadge" class="stock-badge stock-good">0 əd</span>
+        </div>
+
+        <button class="btn-action" id="btnSend">💬 Bota Göndər</button>
+        <button class="btn-action btn-rescan" id="btnRescan">🔄 Yenidən Skan Et</button>
+    </div>
+
+    <div class="status-pill" id="statusText">Barkodu kameranın çərçivəsinə yaxınlaşdırın</div>
+
+    <script>
+        if (window.Telegram && window.Telegram.WebApp) {
+            Telegram.WebApp.ready();
+            Telegram.WebApp.expand();
+        }
+
+        let html5QrCode = null;
+        let lastScannedCode = "";
+
+        function startScanner() {
+            document.getElementById("resultCard").style.display = "none";
+            document.getElementById("reader").style.display = "block";
+            document.getElementById("statusText").innerText = "Barkodu kameranın çərçivəsinə yaxınlaşdırın";
+
+            if (!html5QrCode) {
+                html5QrCode = new Html5Qrcode("reader");
+            }
+
+            const config = {
+                fps: 15,
+                qrbox: { width: 260, height: 160 },
+                aspectRatio: 1.0
+            };
+
+            html5QrCode.start(
+                { facingMode: "environment" },
+                config,
+                onScanSuccess
+            ).catch(err => {
+                document.getElementById("statusText").innerText = "⚠️ Kamera icazəsi tələb olunur və ya kamera tapılmadı.";
+            });
+        }
+
+        function onScanSuccess(decodedText) {
+            if (decodedText === lastScannedCode) return;
+            lastScannedCode = decodedText;
+
+            if (navigator.vibrate) navigator.vibrate(80);
+
+            if (html5QrCode && html5QrCode.isScanning) {
+                html5QrCode.stop().then(() => {
+                    lookupProduct(decodedText);
+                }).catch(() => {
+                    lookupProduct(decodedText);
+                });
+            } else {
+                lookupProduct(decodedText);
+            }
+        }
+
+        function lookupProduct(barcode) {
+            document.getElementById("statusText").innerText = "🔎 Məlumat axtarılır: " + barcode;
+            
+            fetch('/api/search?q=' + encodeURIComponent(barcode))
+                .then(r => r.json())
+                .then(data => {
+                    if (data.found && data.product) {
+                        const p = data.product;
+                        document.getElementById("pName").innerText = p.name;
+                        document.getElementById("pBrand").innerText = p.brand || "-";
+                        document.getElementById("pCode").innerText = p.code || "-";
+                        document.getElementById("pBarcode").innerText = p.barcode || barcode;
+                        document.getElementById("pPrice").innerText = p.price + " AZN";
+
+                        const qty = parseFloat(p.stock) || 0;
+                        const badge = document.getElementById("pStockBadge");
+                        if (qty <= 0) {
+                            badge.className = "stock-badge stock-zero";
+                            badge.innerText = "Bitib (0 əd)";
+                        } else if (qty <= 5) {
+                            badge.className = "stock-badge stock-low";
+                            badge.innerText = qty + " əd (Az qalıb!)";
+                        } else {
+                            badge.className = "stock-badge stock-good";
+                            badge.innerText = qty + " əd";
+                        }
+
+                        document.getElementById("reader").style.display = "none";
+                        document.getElementById("resultCard").style.display = "block";
+                        document.getElementById("statusText").innerText = "✅ Məhsul tapıldı!";
+                    } else {
+                        document.getElementById("pName").innerText = "Naməlum Məhsul";
+                        document.getElementById("pBrand").innerText = "-";
+                        document.getElementById("pCode").innerText = "-";
+                        document.getElementById("pBarcode").innerText = barcode;
+                        document.getElementById("pPrice").innerText = "Tapılmadı";
+                        const badge = document.getElementById("pStockBadge");
+                        badge.className = "stock-badge stock-zero";
+                        badge.innerText = "Bazada yoxdur";
+
+                        document.getElementById("reader").style.display = "none";
+                        document.getElementById("resultCard").style.display = "block";
+                        document.getElementById("statusText").innerText = "⚠️ Bu barkodla məhsul tapılmadı.";
+                    }
+                })
+                .catch(() => {
+                    document.getElementById("statusText").innerText = "Skan edildi: " + barcode;
+                });
+        }
+
+        document.getElementById("btnSend").addEventListener("click", () => {
+            if (window.Telegram && window.Telegram.WebApp && lastScannedCode) {
+                Telegram.WebApp.sendData(lastScannedCode);
+                Telegram.WebApp.close();
+            } else {
+                alert("Barkod: " + lastScannedCode);
+            }
+        });
+
+        document.getElementById("btnRescan").addEventListener("click", () => {
+            lastScannedCode = "";
+            startScanner();
+        });
+
+        window.addEventListener("load", () => {
+            startScanner();
+        });
+    </script>
+</body>
+</html>
+"""
+
 @app.route('/')
 def index():
     uptime_sec = int(time.time() - start_time)
@@ -181,7 +435,43 @@ def health():
         "uptime": int(time.time() - start_time)
     }), 200
 
+@app.route('/scanner')
+def scanner():
+    return render_template_string(SCANNER_HTML)
+
+
+@app.route('/api/search')
+def api_search():
+    q = request.args.get('q', '').strip()
+    if not q:
+        return jsonify({"found": False, "product": None})
+
+    try:
+        df, err = bot.datani_yukle()
+        if err or df is None:
+            return jsonify({"found": False, "product": None})
+
+        results = bot.bazada_axtar(q)
+        if not results or "Uyğun məhsul tapılmadı" in results[0][0]:
+            return jsonify({"found": False, "product": None})
+
+        caption = results[0][0]
+        lines = caption.split("\n")
+        data = {}
+        for l in lines:
+            if "Kod:" in l: data["code"] = l.split("Kod:")[-1].strip()
+            if "Məhsul:" in l: data["name"] = l.split("Məhsul:")[-1].strip()
+            if "Brend:" in l: data["brand"] = l.split("Brend:")[-1].strip()
+            if "Qiymət:" in l: data["price"] = l.split("Qiymət:")[-1].replace("AZN", "").strip()
+            if "Barkod:" in l: data["barcode"] = l.split("Barkod:")[-1].strip()
+            if "Qalıq:" in l: data["stock"] = l.split("Qalıq:")[-1].strip()
+
+        return jsonify({"found": True, "product": data})
+    except Exception as e:
+        return jsonify({"found": False, "error": str(e)})
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
     print(f"🌐 Veb Server başladılır (Port: {port})...")
     app.run(host="0.0.0.0", port=port)
+
