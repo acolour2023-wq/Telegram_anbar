@@ -65,12 +65,29 @@ def run_tests():
             print(f"  ❌ Query '{q}' üçün invalid tuple strukturu qaytarıldı!")
             failed += 1
 
+    # Test 4: Admin and Security Settings
+    print("\n4. Admin və Təhlükəsizlik Testi:")
+    if hasattr(bot, "ADMIN_PASSWORD") and bot.ADMIN_PASSWORD:
+        print(f"  ✅ Admin şifrəsi təyin edilib: {bot.ADMIN_PASSWORD}")
+        passed += 1
+    else:
+        print("  ❌ Admin şifrəsi tapılmadı!")
+        failed += 1
+
+    if hasattr(bot, "PENDING_UPLOADS") and isinstance(bot.PENDING_UPLOADS, dict):
+        print("  ✅ PENDING_UPLOADS təhlükəsiz vəziyyət lüğəti aktivdir.")
+        passed += 1
+    else:
+        print("  ❌ PENDING_UPLOADS mövcud deyil!")
+        failed += 1
+
     print("\n" + "="*40)
     print(f"📊 TEST NƏTİCƏSİ: {passed} Uğurlu, {failed} Xətalı")
     if failed == 0:
         print("🎉 BÜTÜN TESTLƏR UĞURLA KEÇDİ!")
     else:
         sys.exit(1)
+
 
 if __name__ == "__main__":
     run_tests()

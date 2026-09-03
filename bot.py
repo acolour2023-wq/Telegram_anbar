@@ -4,7 +4,9 @@ import sys
 import unicodedata
 import urllib.parse
 import time
-import re
+import shutil
+import base64
+import subprocess
 import requests
 import pandas as pd
 import telebot
@@ -29,9 +31,41 @@ def safe_print(*args, **kwargs):
         except Exception:
             pass
 
+# .env faylını oxuyub mühit dəyişənlərinə yükləyirik
+def load_env_file():
+    """Mövcud .env faylındakı dəyişənləri os.environ-a yükləyir"""
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if os.path.exists(env_path):
+        try:
+            with open(env_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        v = v.strip().strip('"').strip("'")
+                        if k and k not in os.environ:
+                            os.environ[k] = v
+        except Exception as e:
+            safe_print(f"⚠️ .env oxunarkən xəta: {e}")
+
+load_env_file()
+
 # --- 1. AYARLAR ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8273382721:AAGh_3EKl5VLdcKttnh6HEeobdYsZnRiFBw")
 tg_bot = telebot.TeleBot(TELEGRAM_TOKEN)
+
+# Admin və Təhlükəsizlik Ayarları
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "anbar2026")
+ADMIN_IDS_RAW = os.environ.get("ADMIN_IDS", "")
+ADMIN_IDS = [int(x.strip()) for x in ADMIN_IDS_RAW.split(",") if x.strip().isdigit()]
+
+# GitHub Avtomatik Sinxronizasiya (Render üçün)
+GITHUB_REPO = os.environ.get("GITHUB_REPO", "acolour2023-wq/Telegram_anbar")
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
+
+# Təsdiq gözləyən fayl yeniləmələri (user_id -> info)
+PENDING_UPLOADS = {}
 
 # Keş (Cache) mexanizmi: Excel faylını RAM-da saxlamaq üçün
 DATA_CACHE = {
@@ -39,6 +73,7 @@ DATA_CACHE = {
     "mtime": 0,
     "filepath": None
 }
+
 
 # --- 2. KÖMƏKÇİ FUNKSİYALAR ---
 def safe_send_message(chat_id, text, reply_markup=None, thread_id=None, reply_to_message_id=None):
@@ -71,32 +106,6 @@ def safe_send_message(chat_id, text, reply_markup=None, thread_id=None, reply_to
     except Exception as e3:
         safe_print(f"❌ Mesaj heç bir yolla göndərilə bilmədi: {e3}")
         return None
-
-def mehsul_sekli_tap(axtaris_metni):
-    """Məhsul adından birbaşa dəqiq şəkil linkini tapan köməkçi funksiya"""
-    if not axtaris_metni or axtaris_metni == "-":
-        return None
-    try:
-        temiz_metn = re.sub(r'\(.*?\)', '', axtaris_metni).strip()
-        temiz_metn = ' '.join(temiz_metn.split())
-
-        url = f"https://www.bing.com/images/async?q={urllib.parse.quote(temiz_metn)}"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
-        r = requests.get(url, headers=headers, timeout=2.5)
-        thumbs = re.findall(r'https?://tse[0-9]\.mm\.bing\.net/th/id/OIP\.[^"\'\s\\?&]+', r.text)
-        if thumbs:
-            return thumbs[0]
-        thumbs2 = re.findall(r'https?://[a-z0-9]+\.bing\.net/th\?id=OIP\.[^"\'\s\\&]+', r.text)
-        if thumbs2:
-            return thumbs2[0]
-        murls = re.findall(r'murl&quot;:&quot;(https?://[^&]+\.(?:jpg|jpeg|png|webp))', r.text, re.IGNORECASE)
-        if murls:
-            return murls[0]
-    except Exception:
-        pass
-    return None
 
 def az_normalize(text):
     """
@@ -309,10 +318,161 @@ def send_welcome(message):
     except Exception as e:
         safe_print(f"❌ Welcome mesajı göndərmə xətası: {e}")
 
+def github_fayli_yenile(excel_fayl_yolu, user_name="Admin"):
+    """
+    Yeni qəbul olunmuş Excel faylını avtomatik olaraq GitHub reposuna göndərir (commit & push).
+    Bu sayədə Render serveri avtomatik yenilənir və məlumatlar daimi saxlanılır.
+    """
+    if not excel_fayl_yolu or not os.path.exists(excel_fayl_yolu):
+        return False, "Fayl tapılmadı"
+
+    fayl_adi = os.path.basename(excel_fayl_yolu)
+    repo_name = os.environ.get("GITHUB_REPO", "acolour2023-wq/Telegram_anbar")
+    github_token = os.environ.get("GITHUB_TOKEN", "").strip()
+    commit_mesaji = f"🔄 Anbar Excel yeniləndi: {fayl_adi} ({user_name})"
+
+    # 1. Üsul: GitHub REST API (Əgər GITHUB_TOKEN varsa - Render və serverlərdə ən etibarlı yol)
+    if github_token:
+        try:
+            safe_print(f"🌐 GitHub API ilə fayl commit edilir: {repo_name}/{fayl_adi}...")
+            headers = {
+                "Authorization": f"Bearer {github_token}",
+                "Accept": "application/vnd.github.v3+json"
+            }
+            api_url = f"https://api.github.com/repos/{repo_name}/contents/{urllib.parse.quote(fayl_adi)}"
+
+            sha = None
+            r_get = requests.get(api_url, headers=headers, timeout=10)
+            if r_get.status_code == 200:
+                sha = r_get.json().get("sha")
+
+            with open(excel_fayl_yolu, "rb") as f:
+                content_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+            payload = {
+                "message": commit_mesaji,
+                "content": content_b64,
+                "branch": "main"
+            }
+            if sha:
+                payload["sha"] = sha
+
+            r_put = requests.put(api_url, headers=headers, json=payload, timeout=25)
+            if r_put.status_code in [200, 201]:
+                safe_print("✅ GitHub API ilə commit uğurlu oldu! Render yenilənməyə başladı.")
+                return True, "GitHub API ilə push edildi"
+            else:
+                safe_print(f"⚠️ GitHub API cavabı: {r_put.status_code} - {r_put.text}")
+        except Exception as api_err:
+            safe_print(f"⚠️ GitHub API xətası: {api_err}")
+
+    # 2. Üsul: Lokal Git əmrləri (Kompyuterdə işlədikdə)
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        safe_print("💻 Lokal Git ilə GitHub-a commit & push edilir...")
+        subprocess.run(["git", "add", fayl_adi], cwd=current_dir, check=True, capture_output=True, text=True)
+        subprocess.run(["git", "commit", "-m", commit_mesaji], cwd=current_dir, capture_output=True, text=True)
+        subprocess.run(["git", "push", "origin", "main"], cwd=current_dir, check=True, capture_output=True, text=True)
+        safe_print("✅ Lokal Git ilə push tamamlandı.")
+        return True, "Lokal Git ilə push edildi"
+    except Exception as git_err:
+        safe_print(f"ℹ️ Lokal Git push məlumatı: {git_err}")
+        return False, str(git_err)
+
+def execute_excel_update(file_id, file_name, chat_id, thread_id=None, user_name="İstifadəçi", reply_to_id=None):
+    """Excel faylını təhlükəsiz yükləyir, yoxlayır və anbar bazasını yeniləyir"""
+    try:
+        status_msg = safe_send_message(
+            chat_id, 
+            "🔄 Yeni Excel faylı yüklənir və anbar bazası yoxlanılır, xahiş olunur gözləyin...", 
+            thread_id=thread_id, 
+            reply_to_message_id=reply_to_id
+        )
+
+        file_info = tg_bot.get_file(file_id)
+        downloaded_file = tg_bot.download_file(file_info.file_path)
+
+        target_path = fayli_tap()
+        if not target_path:
+            current_folder = os.path.dirname(os.path.abspath(__file__))
+            target_path = os.path.join(current_folder, "Son_anbar_qaliqi.xlsx")
+
+        # Təhlükəsizlik: Faylı birbaşa əzməzdən əvvəl temp fayla yazırıq və oxunmasını test edirik
+        temp_path = target_path + ".tmp"
+        with open(temp_path, 'wb') as f:
+            f.write(downloaded_file)
+
+        try:
+            test_df = pd.read_excel(temp_path, dtype=str).fillna("")
+            if len(test_df) == 0:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                safe_send_message(chat_id, "⚠️ Göndərilən Excel faylı boşdur! Yeniləmə ləğv edildi.", thread_id=thread_id)
+                return
+        except Exception as read_err:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            safe_send_message(chat_id, f"❌ Göndərilən fayl zədəlidir və ya düzgün Excel formatında deyil:\n{read_err}", thread_id=thread_id)
+            return
+
+        # Uğurlu oxunduqda ehtiyat (backup) çıxarırıq və köhnə faylı əvəzləyirik
+        if os.path.exists(target_path):
+            backup_path = target_path + ".bak"
+            try:
+                shutil.copyfile(target_path, backup_path)
+            except Exception:
+                pass
+            os.remove(target_path)
+
+        os.rename(temp_path, target_path)
+
+        # Keşi sıfırlayırıq və yeni məlumatları oxuyuruq
+        DATA_CACHE["df"] = None
+        DATA_CACHE["mtime"] = 0
+        DATA_CACHE["filepath"] = None
+
+        df, err = datani_yukle()
+
+        if err:
+            safe_send_message(chat_id, f"❌ Fayl oxunarkən xəta baş verdi:\n{err}", thread_id=thread_id)
+            return
+
+        # Avtomatik GitHub-a göndəririk (Render-in daimi yenilənməsi üçün)
+        git_ugurlu, git_mesaj = github_fayli_yenile(target_path, user_name)
+
+        cavab = (
+            f"✅ **YENİ EXCEL FAYLI QƏBUL OLUNDU!** 🎉\n\n"
+            f"👤 Admin: {user_name}\n"
+            f"📄 Fayl adı: {file_name}\n"
+            f"📊 Ümumi sətir sayı: {len(df)} məhsul\n"
+            f"⚡ Anbar bazası yeniləndi və dərhal istifadəyə hazırdır!"
+        )
+
+        if git_ugurlu:
+            cavab += "\n\n🚀 **GitHub və Render serveri avtomatik yenilənməyə başladı!**"
+        else:
+            cavab += "\n\nℹ️ *(Lokal baza yeniləndi. Render 7/24 sinxronu üçün GITHUB_TOKEN əlavə edin)*"
+
+        if status_msg and hasattr(status_msg, 'message_id'):
+            try:
+                tg_bot.edit_message_text(cavab, chat_id, status_msg.message_id)
+                safe_print(f"📥 Yeni Excel uğurla tətbiq edildi ({user_name}): {file_name} ({len(df)} sətir)")
+                return
+            except Exception:
+                pass
+
+        safe_send_message(chat_id, cavab, thread_id=thread_id)
+        safe_print(f"📥 Yeni Excel uğurla tətbiq edildi ({user_name}): {file_name} ({len(df)} sətir)")
+
+    except Exception as e:
+        safe_print(f"❌ Excel yükləmə xətası: {e}")
+        safe_send_message(chat_id, f"❌ Fayl yüklənərkən xəta baş verdi: {e}", thread_id=thread_id)
+
 @tg_bot.message_handler(content_types=['document'])
 def handle_document(message):
     try:
         user_name = message.from_user.first_name or "İstifadəçi"
+        user_id = message.from_user.id
         doc = message.document
         file_name = doc.file_name or ""
         thread_id = getattr(message, 'message_thread_id', None)
@@ -321,63 +481,93 @@ def handle_document(message):
             safe_send_message(message.chat.id, "⚠️ Xahiş olunur yalnız Excel (.xlsx / .xls) faylı göndərin.", thread_id=thread_id, reply_to_message_id=message.message_id)
             return
 
-        status_msg = safe_send_message(message.chat.id, "🔄 Yeni Excel faylı yüklənir və anbar yenilənir, xahiş olunur gözləyin...", thread_id=thread_id, reply_to_message_id=message.message_id)
-
-        file_info = tg_bot.get_file(doc.file_id)
-        downloaded_file = tg_bot.download_file(file_info.file_path)
-
-        target_path = fayli_tap()
-        if not target_path:
-            current_folder = os.path.dirname(os.path.abspath(__file__))
-            target_path = os.path.join(current_folder, "Son_anbar_qaliqi.xlsx")
-
-        with open(target_path, 'wb') as f:
-            f.write(downloaded_file)
-
-        DATA_CACHE["df"] = None
-        DATA_CACHE["mtime"] = 0
-        DATA_CACHE["filepath"] = None
-
-        df, err = datani_yukle()
-
-        if err:
-            if status_msg and hasattr(status_msg, 'message_id'):
-                try:
-                    tg_bot.edit_message_text(f"❌ Fayl oxunarkən xəta baş verdi:\n{err}", message.chat.id, status_msg.message_id)
-                except Exception:
-                    safe_send_message(message.chat.id, f"❌ Fayl oxunarkən xəta baş verdi:\n{err}", thread_id=thread_id)
-            else:
-                safe_send_message(message.chat.id, f"❌ Fayl oxunarkən xəta baş verdi:\n{err}", thread_id=thread_id)
-        else:
-            cavab = (
-                f"✅ YENİ EXCEL FAYLI QƏBUL OLUNDU! 🎉\n\n"
-                f"📄 Fayl adı: {file_name}\n"
-                f"📊 Ümumi sətir sayısı: {len(df)} məhsul\n"
-                f"⚡ Anbar 1 saniyəyə yeniləndi və dərhal istifadəyə hazırdır!"
+        # 1. Admin ID Yoxlanışı (Əgər ADMIN_IDS mühit dəyişəni təyin edilibsə)
+        if ADMIN_IDS and user_id not in ADMIN_IDS:
+            safe_print(f"⛔ İcazəsiz fayl yükləmə cəhdi: User ID {user_id} ({user_name})")
+            safe_send_message(
+                message.chat.id,
+                f"⛔ **Giriş Qadağandır!**\n\nBu botda anbar bazasını yeniləmək hüququ yalnız təyin edilmiş adminlərə məxsusdur.\n🆔 Sizin Telegram ID: `{user_id}`",
+                thread_id=thread_id,
+                reply_to_message_id=message.message_id
             )
-            if status_msg and hasattr(status_msg, 'message_id'):
-                try:
-                    tg_bot.edit_message_text(cavab, message.chat.id, status_msg.message_id)
-                except Exception:
-                    safe_send_message(message.chat.id, cavab, thread_id=thread_id)
-            else:
-                safe_send_message(message.chat.id, cavab, thread_id=thread_id)
-            safe_print(f"📥 Yeni Excel yükləndi ({user_name}): {file_name} ({len(df)} sətir)")
+            return
+
+        # 2. Şifrə birbaşa faylın izahatında (caption) yazılıbsa dərhal icra et
+        caption = (message.caption or "").strip()
+        if caption == ADMIN_PASSWORD:
+            safe_print(f"🔑 Şifrə caption ilə təsdiqləndi: {user_name} ({user_id})")
+            execute_excel_update(doc.file_id, file_name, message.chat.id, thread_id, user_name, message.message_id)
+            return
+
+        # 3. Əks halda şifrə gözləmə vəziyyətinə alırıq
+        PENDING_UPLOADS[user_id] = {
+            "file_id": doc.file_id,
+            "file_name": file_name,
+            "chat_id": message.chat.id,
+            "thread_id": thread_id,
+            "user_name": user_name,
+            "attempts": 0,
+            "timestamp": time.time()
+        }
+
+        safe_send_message(
+            message.chat.id,
+            f"🔐 **Admin Şifrəsi Tələb Olunur!**\n\n"
+            f"📁 Fayl: `{file_name}`\n"
+            f"Anbar bazasını yeniləmək üçün zəhmət olmasa **Xüsusi Admin Şifrəsini** daxil edin:\n\n"
+            f"*(Əməliyyatı ləğv etmək üçün /cancel yazın)*",
+            thread_id=thread_id,
+            reply_to_message_id=message.message_id
+        )
 
     except Exception as e:
-        safe_print(f"❌ Excel yükləmə xətası: {e}")
-        safe_send_message(message.chat.id, f"❌ Fayl yüklənərkən xəta baş verdi: {e}", thread_id=thread_id)
+        safe_print(f"❌ Document handler xətası: {e}")
+        safe_send_message(message.chat.id, f"❌ Xəta baş verdi: {e}", thread_id=thread_id)
 
 @tg_bot.message_handler(func=lambda message: True)
 def handle_message(message):
     try:
         user_name = message.from_user.first_name or "İstifadəçi"
+        user_id = message.from_user.id
         txt = message.text.strip() if message.text else ""
         if not txt:
             return
 
-        safe_print(f"📩 Mesaj ({user_name}): {txt}")
         thread_id = getattr(message, 'message_thread_id', None)
+
+        # 1. Gözləyən Admin Şifrəsi Yoxlanışı
+        if user_id in PENDING_UPLOADS:
+            pending = PENDING_UPLOADS[user_id]
+
+            if txt.lower() in ["/cancel", "cancel", "imtina", "leqv", "ləğv"]:
+                del PENDING_UPLOADS[user_id]
+                safe_send_message(message.chat.id, "❌ Excel yeniləmə əməliyyatı ləğv edildi.", thread_id=thread_id, reply_to_message_id=message.message_id)
+                return
+
+            if txt == ADMIN_PASSWORD:
+                file_id = pending["file_id"]
+                file_name = pending["file_name"]
+                del PENDING_UPLOADS[user_id]
+                safe_print(f"🔑 Şifrə düzgün daxil edildi: {user_name} ({user_id})")
+                execute_excel_update(file_id, file_name, message.chat.id, thread_id, user_name, message.message_id)
+                return
+            else:
+                pending["attempts"] += 1
+                if pending["attempts"] >= 3:
+                    del PENDING_UPLOADS[user_id]
+                    safe_print(f"⛔ 3 dəfə yanlış şifrə: {user_name} ({user_id})")
+                    safe_send_message(message.chat.id, "⛔ 3 dəfə yanlış şifrə daxil edildi. Yeniləmə əməliyyatı ləğv edildi!", thread_id=thread_id, reply_to_message_id=message.message_id)
+                else:
+                    qalan = 3 - pending["attempts"]
+                    safe_send_message(
+                        message.chat.id, 
+                        f"❌ Yanlış şifrə! (Qalan cəhd sayı: {qalan})\nZəhmət olmasa şifrəni yenidən yazın və ya ləğv etmək üçün /cancel yazın:", 
+                        thread_id=thread_id, 
+                        reply_to_message_id=message.message_id
+                    )
+                return
+
+        safe_print(f"📩 Mesaj ({user_name}): {txt}")
 
         if txt == "📦 Anbar & Qiymət":
             cavab = "🔍 Axtarmaq istədiyiniz məhsulun kodunu, adını, brendini və ya barkodunu daxil edin:"
@@ -409,6 +599,7 @@ def handle_message(message):
 
     except Exception as e:
         safe_print(f"❌ Göndərmə xətası: {e}")
+
 
 def start_bot():
     safe_print("🚀 BOT BAŞLADILDI (7/24 Rejim - @Anbarbotu_bot)...")
