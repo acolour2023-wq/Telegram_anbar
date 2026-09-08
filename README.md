@@ -29,7 +29,9 @@ git push -u origin main
    - **Build Command**: `pip install -r requirements.txt`
    - **Start Command**: `python app.py`
    - **Environment Variables**:
-     - `TELEGRAM_TOKEN` = `8273382721:AAGh_3EKl5VLdcKttnh6HEeobdYsZnRiFBw`
+     - `TELEGRAM_TOKEN` = `Sizin_Bot_Tokeniniz`
+     - `ADMIN_PASSWORD` = `Sizin_Admin_Şifrəniz`
+     - `SCANNER_URL` = `https://SENIN-APP-ADIN.onrender.com/scanner`
 5. **Create Web Service** düyməsini sıxın.
 
 ---

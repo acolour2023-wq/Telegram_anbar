@@ -53,11 +53,15 @@ def load_env_file():
 load_env_file()
 
 # --- 1. AYARLAR ---
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8273382721:AAGh_3EKl5VLdcKttnh6HEeobdYsZnRiFBw")
-tg_bot = telebot.TeleBot(TELEGRAM_TOKEN)
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "").strip()
+if not TELEGRAM_TOKEN:
+    safe_print("⚠️ DİQQƏT: TELEGRAM_TOKEN tapılmadı! Zəhmət olmasa .env faylında TELEGRAM_TOKEN təyin edin.")
+tg_bot = telebot.TeleBot(TELEGRAM_TOKEN or "0000000000:AA_NO_TOKEN_PROVIDED_IN_ENV")
 
 # Admin və Təhlükəsizlik Ayarları
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "anbar2026")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "").strip()
+if not ADMIN_PASSWORD:
+    safe_print("⚠️ DİQQƏT: ADMIN_PASSWORD tapılmadı! Zəhmət olmasa .env faylında ADMIN_PASSWORD təyin edin.")
 ADMIN_IDS_RAW = os.environ.get("ADMIN_IDS", "")
 ADMIN_IDS = [int(x.strip()) for x in ADMIN_IDS_RAW.split(",") if x.strip().isdigit()]
 
@@ -73,6 +77,12 @@ PENDING_ANNOUNCEMENTS = {}
 
 # Çatda göndərilən və izlənən mesaj ID-ləri (chat_id -> [message_id, ...])
 CHAT_MESSAGES = {}
+
+# İnteraktiv Vərəqləmə (Pagination) axtarış sessiyaları (session_id -> data)
+SEARCH_SESSIONS = {}
+
+# Təkrar axtarışları izləmək üçün (chat_id:query_norm -> {"user_name": ..., "time": ...})
+RECENT_QUERIES = {}
 
 # Barkod Kamera Skaneri WebApp URL (Render üzərindən)
 SCANNER_URL = os.environ.get("SCANNER_URL", "https://telegram-anbar-11y6.onrender.com/scanner")
@@ -263,6 +273,23 @@ def google_duymesi_duzelt(axtaris_metni):
     markup.add(btn)
     return markup
 
+def build_pagination_markup(session_id, current_idx, total, google_markup=None):
+    """Məhsul nəticələri üçün interaktiv vərəqləmə (pagination) və Google düyməsi hazırlayır"""
+    markup = types.InlineKeyboardMarkup()
+    prev_idx = (current_idx - 1) % total
+    next_idx = (current_idx + 1) % total
+
+    btn_prev = types.InlineKeyboardButton("⬅️ Əvvəlki", callback_data=f"nav:{session_id}:{prev_idx}")
+    btn_count = types.InlineKeyboardButton(f"📄 {current_idx + 1} / {total}", callback_data="nav_noop")
+    btn_next = types.InlineKeyboardButton("Növbəti ➡️", callback_data=f"nav:{session_id}:{next_idx}")
+    markup.row(btn_prev, btn_count, btn_next)
+
+    if google_markup and hasattr(google_markup, 'keyboard') and google_markup.keyboard:
+        for row in google_markup.keyboard:
+            markup.row(*row)
+
+    return markup
+
 def bazada_axtar(axtaris_cumlesi):
     """Bazada tam təhlükəsiz axtarış funksiyası. Həmişə (metn, markup) 2-tuple qaytarır."""
     try:
@@ -387,6 +414,27 @@ def bazada_axtar(axtaris_cumlesi):
 # --- 3. BOT COMMAND HANDLERS ---
 @tg_bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
+    txt = (message.text or "").strip()
+    if "scanner" in txt:
+        thread_id = getattr(message, 'message_thread_id', None)
+        chat_id = message.chat.id
+        u_name = urllib.parse.quote(message.from_user.first_name or "İstifadəçi")
+        sep = "&" if "?" in SCANNER_URL else "?"
+        scanner_url = f"{SCANNER_URL}{sep}chat_id={chat_id}&user_name={u_name}"
+        if thread_id:
+            scanner_url += f"&thread_id={thread_id}"
+
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(types.InlineKeyboardButton("📷 Kameranı Aç və Skan Et", web_app=types.WebAppInfo(url=scanner_url)))
+        safe_send_message(
+            message.chat.id,
+            "📷 **Barkod Skaneri Hazırdır!**\n\nAşağıdakı düyməyə toxunaraq kameranı açın və ya qalereyadan barkod şəkli seçin:",
+            reply_markup=markup,
+            thread_id=thread_id,
+            reply_to_message_id=message.message_id
+        )
+        return
+
     metn = (
         "👋 **Salam! Dore Group Məhsul & Anbar Botuna Xoş Gəldiniz.**\n\n"
         "🔍 **Axtarış:** Məhsulun kodunu, adını, brendini və ya barkodun son 4 rəqəmini yazın.\n"
@@ -835,13 +883,27 @@ def handle_message(message):
             )
             return
 
-        if txt in ["📷 Barkod Skaneri", "barkod skaneri", "/skaner", "/scanner"]:
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("📷 Kameranı Aç və Skan Et", web_app=types.WebAppInfo(url=SCANNER_URL)))
+        if txt in ["📷 Barkod Skaneri", "barkod skaneri", "/skaner", "/scanner", "skaner", "scanner"]:
+            chat_id = message.chat.id
+            u_name = urllib.parse.quote(message.from_user.first_name or "İstifadəçi")
+            sep = "&" if "?" in SCANNER_URL else "?"
+            scanner_url = f"{SCANNER_URL}{sep}chat_id={chat_id}&user_name={u_name}"
+            if thread_id:
+                scanner_url += f"&thread_id={thread_id}"
+
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            if is_priv:
+                btn_cam = types.InlineKeyboardButton("📷 Kameranı Aç və Skan Et", web_app=types.WebAppInfo(url=scanner_url))
+            else:
+                btn_cam = types.InlineKeyboardButton("📷 Kameranı Aç və Skan Et", url=scanner_url)
+
+            btn_bot = types.InlineKeyboardButton("💬 Şəxsi Çatda Skaner Aç", url="https://t.me/Anbarbotu_bot?start=scanner")
+            markup.add(btn_cam, btn_bot)
             safe_send_message(
                 message.chat.id,
-                "📷 **Kamera ilə Barkod Skaneri**\n\n"
-                "Aşağıdakı düyməyə toxunaraq telefonunuzun kamerasını açın və məhsulun barkodunu skan edin:",
+                "📷 **Dore Group — Barkod Skaneri**\n\n"
+                "Aşağıdakı düyməyə toxunaraq kameranızı açın və ya barkod şəklini seçin.\n"
+                "Tapılan məhsul məlumatı avtomatik olaraq bu çata göndəriləcək:",
                 reply_markup=markup,
                 thread_id=thread_id,
                 reply_to_message_id=message.message_id
@@ -866,20 +928,142 @@ def handle_message(message):
                 safe_send_message(message.chat.id, f"🗑 Yaddaş (Keş) təmizləndi!\n🔄 Excel faylı təkrar oxundu: {len(df)} sətir yükləndi.", reply_markup=ana_menyu(), thread_id=thread_id)
             return
 
+        # Təkrar axtarış bildirişi (az əvvəl başqası da axtarıbsa)
+        query_key = f"{message.chat.id}:{az_normalize(txt)}"
+        now_ts = time.time()
+        repeat_note = ""
+        prev_search = RECENT_QUERIES.get(query_key)
+        if prev_search and (now_ts - prev_search.get("time", 0) < 120) and prev_search.get("user_id") != user_id:
+            sec_ago = max(1, int(now_ts - prev_search["time"]))
+            prev_u = prev_search.get("user_name", "başqa istifadəçi")
+            repeat_note = f"💡 *(Qeyd: Bu məhsul {sec_ago} san əvvəl {prev_u} tərəfindən də soruşulmuşdu)*\n"
+        RECENT_QUERIES[query_key] = {"user_name": user_name, "user_id": user_id, "time": now_ts}
+
         neticeler = bazada_axtar(txt)
 
-        for res in neticeler:
-            if isinstance(res, (tuple, list)):
-                caption = str(res[0]) if len(res) > 0 else "ℹ️ Məlumat mövcuddur."
-                inline_markup = res[1] if len(res) > 1 and isinstance(res[1], types.InlineKeyboardMarkup) else None
-            else:
-                caption = str(res)
-                inline_markup = None
+        # Məhsul tapılmadı və ya xəta halı
+        if not neticeler or (len(neticeler) == 1 and ("tapılmadı" in str(neticeler[0][0]) or "xəta" in str(neticeler[0][0]).lower())):
+            fail_text = f"👤 **Sorğu:** {user_name}\n🔍 **Axtarılan:** `{txt}`\n━━━━━━━━━━━━━━━━━━━━\n" + str(neticeler[0][0])
+            safe_send_message(message.chat.id, fail_text, thread_id=thread_id, reply_to_message_id=message.message_id)
+            return
 
-            safe_send_message(message.chat.id, caption, reply_markup=inline_markup, thread_id=thread_id)
+        # Yalnız real məhsul kartlarını seçirik (sonuncu "Cəmi X məhsul tapıldı" info sətiri istisna olmaqla)
+        product_results = [r for r in neticeler if isinstance(r, (tuple, list)) and len(r) > 1 and r[1] is not None]
+        if not product_results:
+            product_results = neticeler
+
+        total_prods = len(product_results)
+
+        # 1 məhsul tapıldıqda tək kart göndəririk
+        if total_prods == 1:
+            caption = str(product_results[0][0])
+            header = f"👤 **Sorğu:** {user_name} | 🔍 **Axtarılan:** `{txt}`\n{repeat_note}━━━━━━━━━━━━━━━━━━━━\n"
+            full_caption = header + caption
+            inline_markup = product_results[0][1] if len(product_results[0]) > 1 else None
+            safe_send_message(message.chat.id, full_caption, reply_markup=inline_markup, thread_id=thread_id, reply_to_message_id=message.message_id)
+            return
+
+        # 1-dən çox məhsul tapıldıqda: İnteraktiv Vərəqləmə (Pagination)
+        session_id = f"{user_id}_{int(time.time()*1000) % 1000000}"
+
+        if len(SEARCH_SESSIONS) > 500:
+            old_keys = [k for k, v in SEARCH_SESSIONS.items() if now_ts - v.get("time", 0) > 1800]
+            for k in old_keys:
+                SEARCH_SESSIONS.pop(k, None)
+
+        SEARCH_SESSIONS[session_id] = {
+            "user_name": user_name,
+            "user_id": user_id,
+            "query": txt,
+            "results": product_results,
+            "time": now_ts
+        }
+
+        first_caption = str(product_results[0][0])
+        header = (
+            f"👤 **Sorğu:** {user_name} | 🔍 **Axtarılan:** `{txt}`\n"
+            f"{repeat_note}"
+            f"📊 **Məhsul:** 1 / {total_prods} *(Cəmi {total_prods} uyğun məhsul tapıldı)*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+        )
+        full_caption = header + first_caption
+        p_markup = build_pagination_markup(session_id, 0, total_prods, product_results[0][1])
+
+        safe_send_message(message.chat.id, full_caption, reply_markup=p_markup, thread_id=thread_id, reply_to_message_id=message.message_id)
 
     except Exception as e:
         safe_print(f"❌ Göndərmə xətası: {e}")
+
+
+@tg_bot.callback_query_handler(func=lambda call: call.data and call.data.startswith('nav:'))
+def handle_pagination_callback(call):
+    """Məhsulları çatda yerindəcə vərəqləmək (Pagination) üçün callback işləyicisi"""
+    try:
+        parts = call.data.split(':')
+        if len(parts) != 3:
+            tg_bot.answer_callback_query(call.id)
+            return
+
+        session_id = parts[1]
+        target_idx = int(parts[2])
+
+        session = SEARCH_SESSIONS.get(session_id)
+        if not session:
+            tg_bot.answer_callback_query(call.id, "ℹ️ Axtarış sessiyasının vaxtı bitib. Xahiş olunur yenidən axtarın.", show_alert=False)
+            return
+
+        results = session["results"]
+        total = len(results)
+        if total == 0:
+            tg_bot.answer_callback_query(call.id)
+            return
+
+        target_idx = target_idx % total
+        user_name = session["user_name"]
+        query_txt = session["query"]
+
+        caption_raw = str(results[target_idx][0])
+        header = (
+            f"👤 **Sorğu:** {user_name} | 🔍 **Axtarılan:** `{query_txt}`\n"
+            f"📊 **Məhsul:** {target_idx + 1} / {total} *(Cəmi {total} uyğun məhsul tapıldı)*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+        )
+        full_caption = header + caption_raw
+
+        google_markup = results[target_idx][1] if len(results[target_idx]) > 1 else None
+        markup = build_pagination_markup(session_id, target_idx, total, google_markup)
+
+        try:
+            tg_bot.edit_message_text(
+                full_caption,
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=markup,
+                parse_mode="Markdown"
+            )
+        except Exception:
+            tg_bot.edit_message_text(
+                full_caption,
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=markup
+            )
+
+        tg_bot.answer_callback_query(call.id)
+    except Exception as e:
+        safe_print(f"⚠️ Pagination callback xətası: {e}")
+        try:
+            tg_bot.answer_callback_query(call.id)
+        except Exception:
+            pass
+
+@tg_bot.callback_query_handler(func=lambda call: call.data == 'nav_noop')
+def handle_nav_noop(call):
+    """Səhifə sayğacı düyməsinə toxunulduqda sakitcə təsdiqləyir"""
+    try:
+        tg_bot.answer_callback_query(call.id)
+    except Exception:
+        pass
 
 
 def start_bot():

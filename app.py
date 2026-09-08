@@ -291,12 +291,26 @@ SCANNER_HTML = """
         <button class="btn-action btn-rescan" id="btnRescan">🔄 Yenidən Skan Et</button>
     </div>
 
+    <div style="margin-top: 12px; width: 100%; max-width: 450px;">
+        <input type="file" id="qrFileInput" accept="image/*" style="display: none;">
+        <button class="btn-action" style="background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.15);" id="btnUploadImage">🖼️ Qalereyadan Şəkil Seç</button>
+    </div>
+
     <div class="status-pill" id="statusText">Barkodu kameranın çərçivəsinə yaxınlaşdırın</div>
 
     <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        const chatId = urlParams.get('chat_id');
+        const threadId = urlParams.get('thread_id');
+        const userName = urlParams.get('user_name') || '';
+
         if (window.Telegram && window.Telegram.WebApp) {
             Telegram.WebApp.ready();
             Telegram.WebApp.expand();
+        }
+
+        if (chatId) {
+            document.getElementById("btnSend").innerText = "💬 Qrupa Göndər";
         }
 
         let html5QrCode = null;
@@ -305,6 +319,7 @@ SCANNER_HTML = """
         function startScanner() {
             document.getElementById("resultCard").style.display = "none";
             document.getElementById("reader").style.display = "block";
+            document.getElementById("btnUploadImage").style.display = "block";
             document.getElementById("statusText").innerText = "Barkodu kameranın çərçivəsinə yaxınlaşdırın";
 
             if (!html5QrCode) {
@@ -322,7 +337,7 @@ SCANNER_HTML = """
                 config,
                 onScanSuccess
             ).catch(err => {
-                document.getElementById("statusText").innerText = "⚠️ Kamera icazəsi tələb olunur və ya kamera tapılmadı.";
+                document.getElementById("statusText").innerText = "⚠️ Kamera icazəsi tələb olunur və ya kamera tapılmadı. Şəkli aşağıdan yükləyə bilərsiniz.";
             });
         }
 
@@ -371,6 +386,7 @@ SCANNER_HTML = """
                         }
 
                         document.getElementById("reader").style.display = "none";
+                        document.getElementById("btnUploadImage").style.display = "none";
                         document.getElementById("resultCard").style.display = "block";
                         document.getElementById("statusText").innerText = "✅ Məhsul tapıldı!";
                     } else {
@@ -384,6 +400,7 @@ SCANNER_HTML = """
                         badge.innerText = "Bazada yoxdur";
 
                         document.getElementById("reader").style.display = "none";
+                        document.getElementById("btnUploadImage").style.display = "none";
                         document.getElementById("resultCard").style.display = "block";
                         document.getElementById("statusText").innerText = "⚠️ Bu barkodla məhsul tapılmadı.";
                     }
@@ -393,12 +410,81 @@ SCANNER_HTML = """
                 });
         }
 
+        document.getElementById("btnUploadImage").addEventListener("click", () => {
+            document.getElementById("qrFileInput").click();
+        });
+
+        document.getElementById("qrFileInput").addEventListener("change", e => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            document.getElementById("statusText").innerText = "🖼️ Şəkil yoxlanılır...";
+            if (!html5QrCode) {
+                html5QrCode = new Html5Qrcode("reader");
+            }
+
+            html5QrCode.scanFile(file, true)
+                .then(decodedText => {
+                    onScanSuccess(decodedText);
+                })
+                .catch(err => {
+                    document.getElementById("statusText").innerText = "⚠️ Şəkildə barkod aşkar edilmədi. Zəhmət olmasa daha aydın şəkil seçin.";
+                });
+        });
+
         document.getElementById("btnSend").addEventListener("click", () => {
-            if (window.Telegram && window.Telegram.WebApp && lastScannedCode) {
-                Telegram.WebApp.sendData(lastScannedCode);
-                Telegram.WebApp.close();
+            if (!lastScannedCode) return;
+
+            const btn = document.getElementById("btnSend");
+            btn.disabled = true;
+            btn.innerText = "⏳ Göndərilir...";
+
+            if (chatId) {
+                // Qrupa və ya çata birbaşa backend API vasitəsilə göndəririk
+                const senderName = userName || (window.Telegram?.WebApp?.initDataUnsafe?.user?.first_name || 'İstifadəçi');
+                fetch('/api/send_result', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        chat_id: chatId,
+                        thread_id: threadId,
+                        barcode: lastScannedCode,
+                        user_name: senderName
+                    })
+                })
+                .then(r => r.json())
+                .then(res => {
+                    if (res.success) {
+                        if (window.Telegram && window.Telegram.WebApp) {
+                            Telegram.WebApp.close();
+                        } else {
+                            alert("✅ Məlumat qrupa göndərildi!");
+                            btn.disabled = false;
+                            btn.innerText = "💬 Qrupa Göndər";
+                        }
+                    } else {
+                        alert("⚠️ Xəta: " + (res.error || "Göndərilmədi"));
+                        btn.disabled = false;
+                        btn.innerText = "💬 Qrupa Göndər";
+                    }
+                })
+                .catch(err => {
+                    alert("Şəbəkə xətası: " + err);
+                    btn.disabled = false;
+                    btn.innerText = "💬 Qrupa Göndər";
+                });
             } else {
-                alert("Barkod: " + lastScannedCode);
+                // Şəxsi çat rejimində sendData cəhdi
+                if (window.Telegram && window.Telegram.WebApp) {
+                    try {
+                        Telegram.WebApp.sendData(lastScannedCode);
+                        Telegram.WebApp.close();
+                    } catch(e) {
+                        alert("Barkod: " + lastScannedCode);
+                    }
+                } else {
+                    alert("Barkod: " + lastScannedCode);
+                }
             }
         });
 
@@ -469,6 +555,59 @@ def api_search():
         return jsonify({"found": True, "product": data})
     except Exception as e:
         return jsonify({"found": False, "error": str(e)})
+
+@app.route('/api/send_result', methods=['POST'])
+def api_send_result():
+    """WebApp skanerindən qəbul edilmiş barkod nəticəsini qrupa və ya çata göndərən API"""
+    try:
+        data = request.get_json(force=True) or {}
+        chat_id = data.get('chat_id')
+        thread_id = data.get('thread_id')
+        barcode = (data.get('barcode') or '').strip()
+        user_name = data.get('user_name') or 'İstifadəçi'
+
+        if not chat_id or not barcode:
+            return jsonify({"success": False, "error": "chat_id və ya barcode çatışmır"}), 400
+
+        try:
+            chat_id = int(chat_id)
+        except Exception:
+            pass
+
+        if thread_id:
+            try:
+                thread_id = int(thread_id)
+            except Exception:
+                thread_id = None
+
+        results = bot.bazada_axtar(barcode)
+        if not results or "Uyğun məhsul tapılmadı" in results[0][0]:
+            fail_text = (
+                f"📷 **Barkod Skan Edildi:** `{barcode}`\n"
+                f"👤 **İstifadəçi:** {user_name}\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"⚠️ Bu barkodla anbar bazasında məhsul tapılmadı."
+            )
+            bot.safe_send_message(chat_id, fail_text, thread_id=thread_id)
+            return jsonify({"success": True, "found": False})
+
+        header = f"📷 **Barkod Skan Edildi:** `{barcode}`\n👤 **İstifadəçi:** {user_name}\n━━━━━━━━━━━━━━━━━━━━\n"
+
+        for res in results:
+            if isinstance(res, (tuple, list)):
+                caption = str(res[0]) if len(res) > 0 else ""
+                inline_markup = res[1] if len(res) > 1 and isinstance(res[1], bot.types.InlineKeyboardMarkup) else None
+            else:
+                caption = str(res)
+                inline_markup = None
+
+            full_caption = header + caption if caption else header
+            bot.safe_send_message(chat_id, full_caption, reply_markup=inline_markup, thread_id=thread_id)
+
+        return jsonify({"success": True, "found": True})
+    except Exception as e:
+        bot.safe_print(f"❌ api_send_result xətası: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
