@@ -300,18 +300,19 @@ SCANNER_HTML = """
 
     <script>
         const urlParams = new URLSearchParams(window.location.search);
-        const chatId = urlParams.get('chat_id');
+        // Əgər linkdə chat_id ötürülməyibsə, birbaşa Dore Group MMC qrupuna (-1003749180365) göndərir
+        const chatId = urlParams.get('chat_id') || '-1003749180365';
         const threadId = urlParams.get('thread_id');
         const userName = urlParams.get('user_name') || '';
 
         if (window.Telegram && window.Telegram.WebApp) {
-            Telegram.WebApp.ready();
-            Telegram.WebApp.expand();
+            try {
+                Telegram.WebApp.ready();
+                Telegram.WebApp.expand();
+            } catch(e) {}
         }
 
-        if (chatId) {
-            document.getElementById("btnSend").innerText = "💬 Qrupa Göndər";
-        }
+        document.getElementById("btnSend").innerText = "💬 Qrupa Göndər";
 
         let html5QrCode = null;
         let lastScannedCode = "";
@@ -437,59 +438,73 @@ SCANNER_HTML = """
 
             const btn = document.getElementById("btnSend");
             btn.disabled = true;
-            btn.innerText = "⏳ Göndərilir...";
+            btn.style.opacity = "0.75";
+            btn.innerText = "⏳ Qrupa Göndərilir...";
+            document.getElementById("statusText").innerText = "⏳ Məlumat qrupa göndərilir, xahiş olunur gözləyin...";
 
-            if (chatId) {
-                // Qrupa və ya çata birbaşa backend API vasitəsilə göndəririk
-                const senderName = userName || (window.Telegram?.WebApp?.initDataUnsafe?.user?.first_name || 'İstifadəçi');
-                fetch('/api/send_result', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        chat_id: chatId,
-                        thread_id: threadId,
-                        barcode: lastScannedCode,
-                        user_name: senderName
-                    })
+            const senderName = userName || (window.Telegram?.WebApp?.initDataUnsafe?.user?.first_name || 'İstifadəçi');
+            
+            fetch('/api/send_result', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    chat_id: chatId,
+                    thread_id: threadId,
+                    barcode: lastScannedCode,
+                    user_name: senderName
                 })
-                .then(r => r.json())
-                .then(res => {
-                    if (res.success) {
-                        if (window.Telegram && window.Telegram.WebApp) {
-                            Telegram.WebApp.close();
-                        } else {
-                            alert("✅ Məlumat qrupa göndərildi!");
-                            btn.disabled = false;
-                            btn.innerText = "💬 Qrupa Göndər";
-                        }
-                    } else {
-                        alert("⚠️ Xəta: " + (res.error || "Göndərilmədi"));
-                        btn.disabled = false;
-                        btn.innerText = "💬 Qrupa Göndər";
-                    }
-                })
-                .catch(err => {
-                    alert("Şəbəkə xətası: " + err);
+            })
+            .then(r => r.json())
+            .then(res => {
+                if (res.success) {
                     btn.disabled = false;
-                    btn.innerText = "💬 Qrupa Göndər";
-                });
-            } else {
-                // Şəxsi çat rejimində sendData cəhdi
-                if (window.Telegram && window.Telegram.WebApp) {
-                    try {
-                        Telegram.WebApp.sendData(lastScannedCode);
-                        Telegram.WebApp.close();
-                    } catch(e) {
-                        alert("Barkod: " + lastScannedCode);
+                    btn.style.opacity = "1";
+                    btn.style.background = "linear-gradient(135deg, #16a34a 0%, #15803d 100%)";
+                    btn.innerText = "✅ Qrupa Uğurla Göndərildi!";
+                    document.getElementById("statusText").innerText = "🎉 Məlumat Dore Group MMC qrupuna göndərildi!";
+
+                    // Əgər qrupa qayıt düyməsi yoxdursa əlavə edirik
+                    if (!document.getElementById("btnReturn")) {
+                        const returnBtn = document.createElement("a");
+                        returnBtn.id = "btnReturn";
+                        returnBtn.className = "btn-action";
+                        returnBtn.style.background = "linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)";
+                        returnBtn.style.marginTop = "10px";
+                        returnBtn.href = "https://t.me/Dore_Group_Mmc";
+                        returnBtn.innerText = "💬 Telegram Qrupuna Qayıt";
+                        document.getElementById("resultCard").appendChild(returnBtn);
+                    }
+
+                    // Əgər Telegram WebApp daxilindədirsə bağlamağa çalışırıq
+                    if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData) {
+                        try { Telegram.WebApp.close(); } catch(e) {}
                     }
                 } else {
-                    alert("Barkod: " + lastScannedCode);
+                    btn.disabled = false;
+                    btn.style.opacity = "1";
+                    btn.style.background = "linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)";
+                    btn.innerText = "⚠️ Xəta: Təkrar Cəhd Edin";
+                    document.getElementById("statusText").innerText = "⚠️ Göndərilmədi: " + (res.error || "Xəta baş verdi");
                 }
-            }
+            })
+            .catch(err => {
+                btn.disabled = false;
+                btn.style.opacity = "1";
+                btn.style.background = "linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)";
+                btn.innerText = "⚠️ Şəbəkə Xətası: Təkrar Cəhd Edin";
+                document.getElementById("statusText").innerText = "⚠️ Şəbəkə xətası baş verdi. İnternet bağlantınızı yoxlayın.";
+            });
         });
 
         document.getElementById("btnRescan").addEventListener("click", () => {
             lastScannedCode = "";
+            const btn = document.getElementById("btnSend");
+            btn.disabled = false;
+            btn.style.opacity = "1";
+            btn.style.background = "linear-gradient(135deg, #0284c7 0%, #0369a1 100%)";
+            btn.innerText = "💬 Qrupa Göndər";
+            const ret = document.getElementById("btnReturn");
+            if (ret) ret.remove();
             startScanner();
         });
 
@@ -545,12 +560,12 @@ def api_search():
         lines = caption.split("\n")
         data = {}
         for l in lines:
-            if "Kod:" in l: data["code"] = l.split("Kod:")[-1].strip()
-            if "Məhsul:" in l: data["name"] = l.split("Məhsul:")[-1].strip()
-            if "Brend:" in l: data["brand"] = l.split("Brend:")[-1].strip()
-            if "Qiymət:" in l: data["price"] = l.split("Qiymət:")[-1].replace("AZN", "").strip()
-            if "Barkod:" in l: data["barcode"] = l.split("Barkod:")[-1].strip()
-            if "Qalıq:" in l: data["stock"] = l.split("Qalıq:")[-1].strip()
+            if "Kod:" in l: data["code"] = l.split("Kod:")[-1].replace("*", "").replace("`", "").strip()
+            if "Məhsul:" in l: data["name"] = l.split("Məhsul:")[-1].replace("*", "").replace("`", "").strip()
+            if "Brend:" in l: data["brand"] = l.split("Brend:")[-1].replace("*", "").replace("`", "").strip()
+            if "Qiymət:" in l: data["price"] = l.split("Qiymət:")[-1].replace("*", "").replace("`", "").replace("AZN", "").strip()
+            if "Barkod:" in l: data["barcode"] = l.split("Barkod:")[-1].replace("*", "").replace("`", "").strip()
+            if "Qalıq:" in l: data["stock"] = l.split("Qalıq:")[-1].replace("*", "").replace("`", "").strip()
 
         return jsonify({"found": True, "product": data})
     except Exception as e:
