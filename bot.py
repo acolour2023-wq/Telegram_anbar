@@ -53,7 +53,13 @@ def load_env_file():
 load_env_file()
 
 # --- 1. AYARLAR ---
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "").strip()
+TELEGRAM_TOKEN = (
+    os.environ.get("TELEGRAM_TOKEN")
+    or os.environ.get("BOT_TOKEN")
+    or os.environ.get("TELEGRAM_BOT_TOKEN")
+    or os.environ.get("TOKEN")
+    or ""
+).strip().strip('"').strip("'")
 if not TELEGRAM_TOKEN:
     safe_print("⚠️ DİQQƏT: TELEGRAM_TOKEN tapılmadı! Zəhmət olmasa .env faylında TELEGRAM_TOKEN təyin edin.")
 tg_bot = telebot.TeleBot(TELEGRAM_TOKEN or "0000000000:AA_NO_TOKEN_PROVIDED_IN_ENV")

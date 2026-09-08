@@ -530,12 +530,14 @@ def index():
 
 @app.route('/health')
 def health():
+    matching_keys = [k for k in os.environ.keys() if any(w in k.upper() for w in ["TOKEN", "BOT", "TELEGRAM", "KEY"])]
     return jsonify({
         "status": "ok",
         "bot": "running",
         "uptime": int(time.time() - start_time),
         "has_token": bool(bot.TELEGRAM_TOKEN),
-        "token_len": len(bot.TELEGRAM_TOKEN or "")
+        "token_len": len(bot.TELEGRAM_TOKEN or ""),
+        "matching_env_keys": matching_keys
     }), 200
 
 @app.route('/scanner')
