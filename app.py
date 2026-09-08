@@ -470,7 +470,7 @@ SCANNER_HTML = """
                         returnBtn.className = "btn-action";
                         returnBtn.style.background = "linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)";
                         returnBtn.style.marginTop = "10px";
-                        returnBtn.href = "https://t.me/Dore_Group_Mmc";
+                        returnBtn.href = "https://t.me/Doregroupmmc";
                         returnBtn.innerText = "💬 Telegram Qrupuna Qayıt";
                         document.getElementById("resultCard").appendChild(returnBtn);
                     }
