@@ -533,7 +533,9 @@ def health():
     return jsonify({
         "status": "ok",
         "bot": "running",
-        "uptime": int(time.time() - start_time)
+        "uptime": int(time.time() - start_time),
+        "has_token": bool(bot.TELEGRAM_TOKEN),
+        "token_len": len(bot.TELEGRAM_TOKEN or "")
     }), 200
 
 @app.route('/scanner')
@@ -617,7 +619,10 @@ def api_send_result():
                 inline_markup = None
 
             full_caption = header + caption if caption else header
-            bot.safe_send_message(chat_id, full_caption, reply_markup=inline_markup, thread_id=thread_id)
+            sent_msg = bot.safe_send_message(chat_id, full_caption, reply_markup=inline_markup, thread_id=thread_id)
+            if not sent_msg:
+                bot.safe_print(f"❌ api_send_result: Telegram-a mesaj göndərilə bilmədi (Chat: {chat_id})")
+                return jsonify({"success": False, "error": "Telegram API mesajı qəbul etmədi. Botun qrupdakı icazələrini və ya tokeni yoxlayın."}), 500
 
         return jsonify({"success": True, "found": True})
     except Exception as e:
