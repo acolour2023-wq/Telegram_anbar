@@ -214,7 +214,7 @@ def morning_greeting_worker():
                     pass
 
                 safe_print(f"📢 Səhər salamlama mesajı göndərilir: {target_id} ({today_str} 09:00)")
-                sent = safe_send_message(target_id, greeting_text, track=False)
+                sent = safe_send_message(target_id, greeting_text, reply_markup=ana_menyu(False), track=False)
                 if sent:
                     last_sent_date = today_str
                     safe_print(f"✅ Səhər salamlama mesajı qrupa uğurla çatdırıldı: {target_id}")
@@ -908,6 +908,22 @@ def handle_message(message):
 
         txt_low = txt.lower()
 
+        is_priv = (message.chat.type == "private")
+
+        # Əsas menyu və Başlat əmrləri (/start, /menu, menyu)
+        if txt_low in ["/start", "/menu", "menu", "menyu", "/menyu", "/help", "kömək", "komek"]:
+            welcome_text = (
+                "🏢 **DORE GROUP MMC — ANBAR BOTU** 📦\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "Aşağıdakı menyu düymələrindən istifadə edə bilərsiniz:\n\n"
+                "• **📦 Anbar & Qiymət:** Axtarış qaydaları\n"
+                "• **📷 Barkod Skaneri:** Kamera ilə skan\n"
+                "• **☎️ Əlaqə & Şöbələr:** Şirkət əlaqə nömrələri\n\n"
+                "🔍 **Axtarış üçün:** Sadəcə barkodun son 4 rəqəmini və ya məhsulun adını çata yazın!"
+            )
+            safe_send_message(message.chat.id, welcome_text, reply_markup=ana_menyu(is_priv), thread_id=thread_id, reply_to_message_id=message.message_id)
+            return
+
         # Səhər salamlama mesajını test etmək üçün əmr
         if txt_low in ["/seher", "/sabah", "/salamlama"]:
             test_greeting = (
@@ -915,7 +931,7 @@ def handle_message(message):
                 "💼 Hər birinizə uğurlu, bərəkətli və bol enerjili iş günü arzulayırıq! 🚀\n\n"
                 "📦 *Anbar botu aktivdir — məhsul qalığını və qiymətini öyrənmək üçün barkodun son 4 rəqəmini və ya adını yazmağınız kifayətdir.*"
             )
-            safe_send_message(message.chat.id, test_greeting, thread_id=thread_id)
+            safe_send_message(message.chat.id, test_greeting, reply_markup=ana_menyu(is_priv), thread_id=thread_id)
             return
 
         if any(txt_low.startswith(cmd) for cmd in ["/temizle", "temizle", "/clear", "clear", "/sil", "sil", "🧹 çatı təmizlə", "çatı təmizlə", "chati temizle"]):
@@ -1151,6 +1167,22 @@ def start_bot():
         greeting_t.start()
     except Exception as ge:
         safe_print(f"⚠️ Səhər salamlama taymeri başladıla bilmədi: {ge}")
+
+    # Telegram Menyu düyməsini qeydiyyatdan keçiririk (Qrup və şəxsi çat üçün)
+    try:
+        cmds = [
+            types.BotCommand("menu", "📋 Əsas menyu düymələrini göstər"),
+            types.BotCommand("skaner", "📷 Barkod Skaneri"),
+            types.BotCommand("elaqe", "☎️ Dore Group MMC əlaqə"),
+            types.BotCommand("seher", "🌅 Səhər salamlama mesajı"),
+            types.BotCommand("temizle", "🧹 Çatı təmizlə (Admin)"),
+        ]
+        tg_bot.set_my_commands(cmds)
+        tg_bot.set_my_commands(cmds, scope=types.BotCommandScopeAllGroupChats())
+        tg_bot.set_my_commands(cmds, scope=types.BotCommandScopeAllPrivateChats())
+        safe_print("✅ Telegram Menyu komandaları qeydiyyatdan keçirildi.")
+    except Exception as cmd_err:
+        safe_print(f"⚠️ Menyu komandaları qeydiyyatı: {cmd_err}")
 
     while True:
         try:
