@@ -361,6 +361,8 @@ def bazada_axtar(axtaris_cumlesi):
         barkod_col = next((orig for orig, clean in col_map.items() if any(k in clean for k in ['barkod', 'barcode', 'shtrih'])), None)
         brend_col = next((orig for orig, clean in col_map.items() if any(k in clean for k in ['brend', 'brand', 'firma', 'marka'])), None)
         qalig_col = next((orig for orig, clean in col_map.items() if any(k in clean for k in ['qalig', 'qaliq', 'stok', 'say', 'miqdar', 'ostatok', 'count', 'qty'])), None)
+        if not qalig_col:
+            qalig_col = next((orig for orig, clean in col_map.items() if 'anbar' in clean), None)
 
         if not kod_col and not ad_col: 
             return [("❌ Excel faylında uyğun sütunlar ('KODU', 'ADI') tapılmadı.", None)]
