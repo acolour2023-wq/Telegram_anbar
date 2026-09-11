@@ -342,12 +342,10 @@ def bazada_axtar(axtaris_cumlesi):
 
             if is_digits:
                 score = 0
-                if barkod_norm == query_norm or kod_norm == query_norm:
+                if barkod_norm == query_norm:
                     score = 100
-                elif barkod_norm.endswith(query_norm) or kod_norm.endswith(query_norm):
+                elif barkod_norm.endswith(query_norm):
                     score = 80
-                elif query_norm in barkod_norm or query_norm in kod_norm:
-                    score = 60
                 else:
                     continue
                 matches.append((score, row, db_kod, db_ad, db_barkod, db_brend, db_qalig))
