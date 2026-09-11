@@ -621,7 +621,13 @@ def github_fayli_yenile(excel_fayl_yolu, user_name="Admin"):
 
     fayl_adi = os.path.basename(excel_fayl_yolu)
     repo_name = os.environ.get("GITHUB_REPO", "acolour2023-wq/Telegram_anbar")
-    github_token = os.environ.get("GITHUB_TOKEN", "").strip()
+    github_token = (
+        GITHUB_TOKEN
+        or os.environ.get("GITHUB_TOKEN")
+        or os.environ.get("GITHUBTOKEN")
+        or os.environ.get("GH_TOKEN")
+        or ""
+    ).strip()
     commit_mesaji = f"🔄 Anbar Excel yeniləndi: {fayl_adi} ({user_name})"
 
     # 1. Üsul: GitHub REST API (Əgər GITHUB_TOKEN varsa - Render və serverlərdə ən etibarlı yol)
