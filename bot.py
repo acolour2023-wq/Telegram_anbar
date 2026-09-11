@@ -66,9 +66,7 @@ if not TELEGRAM_TOKEN:
 tg_bot = telebot.TeleBot(TELEGRAM_TOKEN or "0000000000:AA_NO_TOKEN_PROVIDED_IN_ENV")
 
 # Admin və Təhlükəsizlik Ayarları
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "").strip()
-if not ADMIN_PASSWORD:
-    safe_print("⚠️ DİQQƏT: ADMIN_PASSWORD tapılmadı! Zəhmət olmasa .env faylında ADMIN_PASSWORD təyin edin.")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "anbar2026").strip() or "anbar2026"
 ADMIN_IDS_RAW = os.environ.get("ADMIN_IDS", "")
 ADMIN_IDS = [int(x.strip()) for x in ADMIN_IDS_RAW.split(",") if x.strip().isdigit()]
 
@@ -784,7 +782,7 @@ def handle_document(message):
 
         # 2. Şifrə birbaşa faylın izahatında (caption) yazılıbsa dərhal icra et
         caption = (message.caption or "").strip()
-        if caption == ADMIN_PASSWORD:
+        if ADMIN_PASSWORD and caption and caption == ADMIN_PASSWORD:
             safe_print(f"🔑 Şifrə caption ilə təsdiqləndi: {user_name} ({user_id})")
             execute_excel_update(doc.file_id, file_name, message.chat.id, thread_id, user_name, message.message_id)
             return
