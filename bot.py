@@ -72,7 +72,12 @@ ADMIN_IDS = [int(x.strip()) for x in ADMIN_IDS_RAW.split(",") if x.strip().isdig
 
 # GitHub Avtomatik Sinxronizasiya (Render üçün)
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "acolour2023-wq/Telegram_anbar")
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
+GITHUB_TOKEN = (
+    os.environ.get("GITHUB_TOKEN")
+    or os.environ.get("GITHUBTOKEN")
+    or os.environ.get("GH_TOKEN")
+    or ""
+).strip()
 
 # Təsdiq gözləyən fayl yeniləmələri (user_id -> info)
 PENDING_UPLOADS = {}
