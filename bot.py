@@ -4,6 +4,7 @@ import sys
 import unicodedata
 import urllib.parse
 import time
+import datetime
 import shutil
 import base64
 import subprocess
@@ -93,6 +94,9 @@ RECENT_QUERIES = {}
 # Barkod Kamera Skaneri WebApp URL (Render üzərindən)
 SCANNER_URL = os.environ.get("SCANNER_URL", "https://telegram-anbar-11y6.onrender.com/scanner")
 
+# Dore Group MMC Qrup ID-si (Səhər salamlama və bildirişlər üçün)
+GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "-1003749180365")
+
 # Dore Group MMC - Əlaqə və Şöbələr Məlumatı
 CONTACTS_INFO = (
     "🏢 **DORE GROUP MMC — ƏLAQƏ VƏ ANBAR** 📞\n"
@@ -180,7 +184,44 @@ def safe_send_message(chat_id, text, reply_markup=None, thread_id=None, reply_to
 
     return sent_msg
 
+def morning_greeting_worker():
+    """Hər səhər saat 09:00-da (Bakı vaxtı ilə UTC+4) qrupa salamlama və uğurlar mesajı göndərən arxa fon funksiyası"""
+    safe_print("⏰ Səhər salamlama taymeri aktivdir (Hər səhər 09:00 - Bakı vaxtı ilə).")
+    last_sent_date = None
 
+    while True:
+        try:
+            # Bakı saat qurşağı (UTC+4)
+            baku_tz = datetime.timezone(datetime.timedelta(hours=4))
+            now_baku = datetime.datetime.now(baku_tz)
+            today_str = now_baku.strftime("%Y-%m-%d")
+
+            # Hər səhər 09:00 - 09:05 aralığında və bu gün göndərilməyibsə
+            if now_baku.hour == 9 and now_baku.minute < 5 and last_sent_date != today_str:
+                greeting_text = (
+                    "🌅 **Sabahınız xeyir, Dore Group MMC komandası!** ☀️\n\n"
+                    "💼 Hər birinizə uğurlu, bərəkətli və bol enerjili iş günü arzulayırıq! 🚀\n\n"
+                    "📦 *Anbar botu aktivdir — məhsul qalığını və qiymətini öyrənmək üçün barkodun son 4 rəqəmini və ya adını yazmağınız kifayətdir.*"
+                )
+
+                target_id = GROUP_CHAT_ID
+                try:
+                    target_id = int(target_id)
+                except Exception:
+                    pass
+
+                safe_print(f"📢 Səhər salamlama mesajı göndərilir: {target_id} ({today_str} 09:00)")
+                sent = safe_send_message(target_id, greeting_text, track=False)
+                if sent:
+                    last_sent_date = today_str
+                    safe_print(f"✅ Səhər salamlama mesajı qrupa uğurla çatdırıldı: {target_id}")
+                else:
+                    safe_print(f"⚠️ Səhər salamlama mesajı göndərilə bilmədi: {target_id}")
+
+            time.sleep(25)
+        except Exception as e:
+            safe_print(f"⚠️ Səhər salamlama taymerində xəta: {e}")
+            time.sleep(60)
 
 def az_normalize(text):
     """
@@ -849,7 +890,23 @@ def handle_message(message):
         # Gələn mesajın ID-sini izləyirik
         CHAT_MESSAGES.setdefault(message.chat.id, []).append(message.message_id)
 
+        # Qrupdan mesaj gələrsə avtomatik hədəf qrup kimi qeyd edirik
+        if message.chat.type in ['group', 'supergroup']:
+            global GROUP_CHAT_ID
+            GROUP_CHAT_ID = str(message.chat.id)
+
         txt_low = txt.lower()
+
+        # Səhər salamlama mesajını test etmək üçün əmr
+        if txt_low in ["/seher", "/sabah", "/salamlama"]:
+            test_greeting = (
+                "🌅 **Sabahınız xeyir, Dore Group MMC komandası!** ☀️\n\n"
+                "💼 Hər birinizə uğurlu, bərəkətli və bol enerjili iş günü arzulayırıq! 🚀\n\n"
+                "📦 *Anbar botu aktivdir — məhsul qalığını və qiymətini öyrənmək üçün barkodun son 4 rəqəmini və ya adını yazmağınız kifayətdir.*"
+            )
+            safe_send_message(message.chat.id, test_greeting, thread_id=thread_id)
+            return
+
         if any(txt_low.startswith(cmd) for cmd in ["/temizle", "temizle", "/clear", "clear", "/sil", "sil", "🧹 çatı təmizlə", "çatı təmizlə", "chati temizle"]):
             handle_clear_chat(message)
             return
@@ -1076,6 +1133,13 @@ def start_bot():
         tg_bot.delete_webhook(drop_pending_updates=False)
     except Exception as e:
         safe_print(f"⚠️ Webhook təmizləmə: {e}")
+
+    # Səhər salamlama və motivasiya mesajı taymerini başladırıq
+    try:
+        greeting_t = threading.Thread(target=morning_greeting_worker, daemon=True)
+        greeting_t.start()
+    except Exception as ge:
+        safe_print(f"⚠️ Səhər salamlama taymeri başladıla bilmədi: {ge}")
 
     while True:
         try:
