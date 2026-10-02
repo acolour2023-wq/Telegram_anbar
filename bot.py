@@ -354,20 +354,28 @@ def build_pagination_markup(session_id, current_idx, total, google_markup=None):
     return markup
 
 def bazada_axtar(axtaris_cumlesi):
-    """Bazada tam təhlükəsiz axtarış funksiyası. Həmişə (metn, markup) 2-tuple qaytarır."""
+    """
+    Bazada YALNIZ BARKOD üzrə axtarış funksiyası.
+    İstifadəçi barkodun son 4 rəqəmini və ya tam barkodu daxil edə bilər.
+    """
     try:
         df, err = datani_yukle()
         if err:
             return [(err, None)]
 
         raw_query = str(axtaris_cumlesi).strip()
-        query_norm = az_normalize(raw_query)
-        axtarilan_sozler = query_norm.split()
+        query_digits = ''.join(ch for ch in raw_query if ch.isdigit())
 
-        if not axtarilan_sozler:
-            return [("ℹ️ Xahiş olunur axtarış sözü daxil edin.", None)]
+        if not query_digits:
+            return [(
+                "⚠️ **Axtarış yalnız barkodla aparılır!**\n\n"
+                "Zəhmət olmasa barkodun **son 4 rəqəmini** və ya tam barkodu daxil edin:\n"
+                "*(Nümunə: `1034`, `0754` və ya `8697422821034`)*", 
+                None
+            )]
 
-        safe_print(f"🔎 Axtarılır: '{raw_query}' (Norm: {axtarilan_sozler})")
+        target_4 = query_digits[-4:] if len(query_digits) >= 4 else query_digits
+        safe_print(f"🔎 Barkod Axtarılır: '{raw_query}' (Rəqəmlər: '{query_digits}', Son 4 rəqəm: '{target_4}')")
 
         col_map = {c: sutun_temizle(c) for c in df.columns}
 
@@ -380,12 +388,11 @@ def bazada_axtar(axtaris_cumlesi):
         if not qalig_col:
             qalig_col = next((orig for orig, clean in col_map.items() if 'anbar' in clean), None)
 
-        if not kod_col and not ad_col: 
-            return [("❌ Excel faylında uyğun sütunlar ('KODU', 'ADI') tapılmadı.", None)]
+        if not barkod_col and not ad_col: 
+            return [("❌ Excel faylında 'Barkodu' sütunu tapılmadı.", None)]
 
         matches = []
         records = df.to_dict('records')
-        is_digits = query_norm.isdigit()
 
         for row in records:
             db_kod = temizle(row.get(kod_col, "")) if kod_col else ""
@@ -394,40 +401,26 @@ def bazada_axtar(axtaris_cumlesi):
             db_brend = str(row.get(brend_col, "")).strip() if brend_col else ""
             db_qalig = temizle(row.get(qalig_col, "")) if qalig_col else ""
 
-            kod_norm = az_normalize(db_kod)
-            barkod_norm = az_normalize(db_barkod)
-            ad_norm = az_normalize(db_ad)
-            brend_norm = az_normalize(db_brend)
+            barkod_digits = ''.join(ch for ch in db_barkod if ch.isdigit())
+            if not barkod_digits:
+                continue
 
-            if is_digits:
-                score = 0
-                if kod_norm == query_norm:
-                    score = 110
-                elif barkod_norm == query_norm:
-                    score = 100
-                elif kod_norm and kod_norm.endswith(query_norm):
-                    score = 90
-                elif barkod_norm and barkod_norm.endswith(query_norm):
-                    score = 80
-                else:
-                    tam_setir = f"{kod_norm} {barkod_norm} {ad_norm} {brend_norm}"
-                    if all(soz in tam_setir for soz in axtarilan_sozler):
-                        score = 50
-                    else:
-                        continue
-                matches.append((score, row, db_kod, db_ad, db_barkod, db_brend, db_qalig))
+            score = 0
+            if barkod_digits == query_digits:
+                score = 100  # Tam barkod dəqiq eyni olduqda
+            elif len(query_digits) >= 4 and barkod_digits.endswith(query_digits):
+                score = 90   # Daxil edilmiş 4+ rəqəm barkodun sonu ilə tam eynidir
+            elif barkod_digits.endswith(target_4):
+                score = 80   # Barkodun son 4 rəqəmi ilə uyğun gəlir
+            elif len(query_digits) < 4 and barkod_digits.endswith(query_digits):
+                score = 70   # Barkod daxil edilmiş qısa rəqəmlə bitir
             else:
-                tam_setir = f"{kod_norm} {barkod_norm} {ad_norm} {brend_norm}"
-                if all(soz in tam_setir for soz in axtarilan_sozler):
-                    score = 0
-                    if query_norm in ad_norm:
-                        score += 40
-                    if query_norm in brend_norm:
-                        score += 30
-                    matches.append((score, row, db_kod, db_ad, db_barkod, db_brend, db_qalig))
+                continue
+
+            matches.append((score, row, db_kod, db_ad, db_barkod, db_brend, db_qalig))
 
         if not matches:
-            return [("❌ Uyğun məhsul tapılmadı.", None)]
+            return [(f"❌ `{query_digits}` barkoduna (və ya sonluğu `{target_4}` olan) uyğun məhsul tapılmadı.", None)]
 
         matches.sort(key=lambda x: x[0], reverse=True)
 
@@ -510,7 +503,7 @@ def send_welcome(message):
 
     metn = (
         "👋 **Salam! Dore Group Məhsul & Anbar Botuna Xoş Gəldiniz.**\n\n"
-        "🔍 **Axtarış:** Məhsulun kodunu, adını, brendini və ya barkodun son 4 rəqəmini yazın.\n"
+        "🔍 **Axtarış:** Məhsulun barkodunun **son 4 rəqəmini** və ya tam barkodu yazın.\n"
         "📷 **Skaner:** Aşağıdakı `📷 Barkod Skaneri` düyməsi ilə kameranı açıb barkodu dərhal oxuda bilərsiniz.\n"
         "📢 **Qrupa Elan:** Adminlər üçün rəsmi qrup bildirişi göndərmək imkanı.\n"
         "☎️ **Əlaqə:** Şirkətin məsul şöbələrinin əlaqə nömrələri.\n"
@@ -943,7 +936,7 @@ def handle_message(message):
                 "• **📦 Anbar & Qiymət:** Axtarış qaydaları\n"
                 "• **📷 Barkod Skaneri:** Kamera ilə skan\n"
                 "• **☎️ Əlaqə & Şöbələr:** Şirkət əlaqə nömrələri\n\n"
-                "🔍 **Axtarış üçün:** Sadəcə barkodun son 4 rəqəmini və ya məhsulun adını çata yazın!"
+                "🔍 **Axtarış üçün:** Sadəcə məhsulun barkodunun son 4 rəqəmini çata yazın!"
             )
             safe_send_message(message.chat.id, welcome_text, reply_markup=ana_menyu(is_priv), thread_id=thread_id, reply_to_message_id=message.message_id)
             return
@@ -953,7 +946,7 @@ def handle_message(message):
             test_greeting = (
                 "🌅 **Sabahınız xeyir, Dore Group MMC komandası!** ☀️\n\n"
                 "💼 Hər birinizə uğurlu, bərəkətli və bol enerjili iş günü arzulayırıq! 🚀\n\n"
-                "📦 *Anbar botu aktivdir — məhsul qalığını və qiymətini öyrənmək üçün barkodun son 4 rəqəmini və ya adını yazmağınız kifayətdir.*"
+                "📦 *Anbar botu aktivdir — məhsul qalığını və qiymətini öyrənmək üçün barkodun son 4 rəqəmini yazmağınız kifayətdir.*"
             )
             safe_send_message(message.chat.id, test_greeting, reply_markup=ana_menyu(is_priv), thread_id=thread_id)
             return
@@ -1023,7 +1016,7 @@ def handle_message(message):
             return
 
         if txt == "📦 Anbar & Qiymət":
-            cavab = "🔍 Axtarmaq istədiyiniz məhsulun kodunu, adını, brendini və ya barkodunu daxil edin:"
+            cavab = "🔍 Axtarmaq istədiyiniz məhsulun barkodunun son 4 rəqəmini və ya tam barkodunu daxil edin:"
             safe_send_message(message.chat.id, cavab, reply_markup=ana_menyu(is_priv), thread_id=thread_id, reply_to_message_id=message.message_id)
             return
 
