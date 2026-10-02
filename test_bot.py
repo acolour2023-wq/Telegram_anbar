@@ -137,7 +137,7 @@ def run_tests():
         m1.message_id = 701
         m1.from_user.id = 101
         m1.from_user.first_name = 'Paşa'
-        m1.text = '1034'
+        m1.text = 'NUR GİDA'
         m1.message_thread_id = None
         bot.handle_message(m1)
 
@@ -148,7 +148,7 @@ def run_tests():
         m2.message_id = 702
         m2.from_user.id = 102
         m2.from_user.first_name = 'Elnada'
-        m2.text = '1034'
+        m2.text = 'NUR GİDA'
         m2.message_thread_id = None
         bot.handle_message(m2)
 

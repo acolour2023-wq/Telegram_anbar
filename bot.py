@@ -132,7 +132,7 @@ def auto_delete_message(chat_id, message_id, delay_seconds=5):
 
 def is_user_admin(chat, user_id):
     """İstifadəçinin qrup admini olub-olmadığını yoxlayır"""
-    if chat.type == "private":
+    if chat.type in ["private", "channel"]:
         return True
     if user_id in ADMIN_IDS:
         return True
@@ -142,6 +142,19 @@ def is_user_admin(chat, user_id):
     except Exception as e:
         safe_print(f"⚠️ Admin statusu yoxlanarkən xəta: {e}")
         return False
+
+def get_message_user_info(message):
+    """Mesajdan istifadəçi adı və ID-ni təhlükəsiz şəkildə çıxarır (Qrup, Şəxsi və Kanal postlarını tam dəstəkləyir)"""
+    if getattr(message, 'from_user', None):
+        user_name = message.from_user.first_name or "İstifadəçi"
+        user_id = message.from_user.id
+    elif getattr(message, 'sender_chat', None):
+        user_name = getattr(message.sender_chat, 'title', None) or "Kanal"
+        user_id = message.sender_chat.id
+    else:
+        user_name = getattr(message.chat, 'title', None) or "Kanal"
+        user_id = message.chat.id
+    return user_name, user_id
 
 def safe_send_message(chat_id, text, reply_markup=None, thread_id=None, reply_to_message_id=None, track=True, parse_mode="Markdown"):
     """
@@ -388,12 +401,20 @@ def bazada_axtar(axtaris_cumlesi):
 
             if is_digits:
                 score = 0
-                if barkod_norm == query_norm:
+                if kod_norm == query_norm:
+                    score = 110
+                elif barkod_norm == query_norm:
                     score = 100
-                elif barkod_norm.endswith(query_norm):
+                elif kod_norm and kod_norm.endswith(query_norm):
+                    score = 90
+                elif barkod_norm and barkod_norm.endswith(query_norm):
                     score = 80
                 else:
-                    continue
+                    tam_setir = f"{kod_norm} {barkod_norm} {ad_norm} {brend_norm}"
+                    if all(soz in tam_setir for soz in axtarilan_sozler):
+                        score = 50
+                    else:
+                        continue
                 matches.append((score, row, db_kod, db_ad, db_barkod, db_brend, db_qalig))
             else:
                 tam_setir = f"{kod_norm} {barkod_norm} {ad_norm} {brend_norm}"
@@ -463,12 +484,14 @@ def bazada_axtar(axtaris_cumlesi):
 
 # --- 3. BOT COMMAND HANDLERS ---
 @tg_bot.message_handler(commands=['start', 'help'])
+@tg_bot.channel_post_handler(commands=['start', 'help'])
 def send_welcome(message):
+    user_name, user_id = get_message_user_info(message)
     txt = (message.text or "").strip()
     if "scanner" in txt:
         thread_id = getattr(message, 'message_thread_id', None)
         chat_id = message.chat.id
-        u_name = urllib.parse.quote(message.from_user.first_name or "İstifadəçi")
+        u_name = urllib.parse.quote(user_name)
         sep = "&" if "?" in SCANNER_URL else "?"
         scanner_url = f"{SCANNER_URL}{sep}chat_id={chat_id}&user_name={u_name}"
         if thread_id:
@@ -502,6 +525,7 @@ def send_welcome(message):
         safe_print(f"❌ Welcome mesajı göndərmə xətası: {e}")
 
 @tg_bot.message_handler(content_types=['web_app_data'])
+@tg_bot.channel_post_handler(content_types=['web_app_data'])
 def handle_web_app_data(message):
     """Kamera ilə skan edilmiş barkodu WebApp-dan qəbul edir və dərhal axtarış edir"""
     try:
@@ -524,11 +548,11 @@ def handle_web_app_data(message):
 
 
 @tg_bot.message_handler(commands=['temizle', 'clear', 'sil', 'clean'])
+@tg_bot.channel_post_handler(commands=['temizle', 'clear', 'sil', 'clean'])
 def handle_clear_chat(message):
     """Qrup adminləri üçün çatı və köhnə axtarışları təmizləyən əmr"""
     try:
-        user_id = message.from_user.id
-        user_name = message.from_user.first_name or "İstifadəçi"
+        user_name, user_id = get_message_user_info(message)
         chat_id = message.chat.id
         thread_id = getattr(message, 'message_thread_id', None)
 
@@ -768,10 +792,10 @@ def execute_excel_update(file_id, file_name, chat_id, thread_id=None, user_name=
         safe_send_message(chat_id, f"❌ Fayl yüklənərkən xəta baş verdi: {e}", thread_id=thread_id)
 
 @tg_bot.message_handler(content_types=['document'])
+@tg_bot.channel_post_handler(content_types=['document'])
 def handle_document(message):
     try:
-        user_name = message.from_user.first_name or "İstifadəçi"
-        user_id = message.from_user.id
+        user_name, user_id = get_message_user_info(message)
         doc = message.document
         file_name = doc.file_name or ""
         thread_id = getattr(message, 'message_thread_id', None)
@@ -824,10 +848,10 @@ def handle_document(message):
         safe_send_message(message.chat.id, f"❌ Xəta baş verdi: {e}", thread_id=thread_id)
 
 @tg_bot.message_handler(func=lambda message: True)
+@tg_bot.channel_post_handler(func=lambda message: True)
 def handle_message(message):
     try:
-        user_name = message.from_user.first_name or "İstifadəçi"
-        user_id = message.from_user.id
+        user_name, user_id = get_message_user_info(message)
         txt = message.text.strip() if message.text else ""
         if not txt:
             return
@@ -973,7 +997,7 @@ def handle_message(message):
 
         if txt in ["📷 Barkod Skaneri", "barkod skaneri", "/skaner", "/scanner", "skaner", "scanner"]:
             chat_id = message.chat.id
-            u_name = urllib.parse.quote(message.from_user.first_name or "İstifadəçi")
+            u_name = urllib.parse.quote(user_name)
             sep = "&" if "?" in SCANNER_URL else "?"
             scanner_url = f"{SCANNER_URL}{sep}chat_id={chat_id}&user_name={u_name}"
             if thread_id:
